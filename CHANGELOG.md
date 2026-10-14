@@ -2,7 +2,7 @@
 
 ## UNRELEASED
 
-- **Add: per-project Claude account (`provider.account`)** — a project's `.pi/claude-bridge.json` can name a login, e.g. `"banx"`, and Claude Code runs with `CLAUDE_CONFIG_DIR=~/.claude-accounts/<name>`. A missing login fails as not logged in rather than falling back to the default account; log in with `CLAUDE_CONFIG_DIR=~/.claude-accounts/<name> claude auth login`.
+- **Add: per-project Claude account (`provider.account`)** — a project's `.pi/claude-bridge.json` can name a login, e.g. `"banx"`, and Claude Code runs with `CLAUDE_CONFIG_DIR=~/.claude-accounts/<name>`. A missing login fails as not logged in rather than falling back to the default account; `/claude-account` shows the project's account and who it is signed in as, `/claude-account <name>` or `/claude-account default` switches it (keeping the file out of git) and reloads, and `/claude-account login` signs in from inside pi.
 
 ## UNRELEASED
 

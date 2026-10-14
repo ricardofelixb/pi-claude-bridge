@@ -15,7 +15,8 @@ import { verifyWrittenSession as _verifyWrittenSession } from "./session-verify.
 import { extractAllToolResults as _extractAllToolResults, type McpResult } from "./extract-tool-results.js";
 import { QueryContext, ctx } from "./query-state.js";
 import { makePromptStream, userMessage, type PromptStream } from "./prompt-stream.js";
-import { accountConfigDir, claudeCodeSettings, loadConfig, markStartupNoticeShown, type Config } from "./config.js";
+import { applyAccount, claudeAccountCommand } from "./account.js";
+import { claudeCodeSettings, loadConfig, markStartupNoticeShown, type Config } from "./config.js";
 import {
 	collectPromptSkills,
 	projectPromptCapture,
@@ -2381,13 +2382,11 @@ export default function (pi: ExtensionAPI) {
 	// Every Claude Code child inherits process.env, and the session paths read it too.
 	// Set even when the login is missing: Claude Code then refuses as not logged in
 	// instead of falling back to the default account.
-	if (providerSettings.account !== undefined) {
-		const dir = accountConfigDir(providerSettings.account);
-		process.env.CLAUDE_CONFIG_DIR = dir;
-		if (!existsSync(dir)) {
-			console.error(`claude-bridge: no login for account "${providerSettings.account}". Run: CLAUDE_CONFIG_DIR=${dir} claude auth login`);
-		}
+	const accountDir = applyAccount(providerSettings.account);
+	if (providerSettings.account !== undefined && accountDir !== undefined && !existsSync(accountDir)) {
+		console.error(`claude-bridge: account "${providerSettings.account}" is not signed in. Run /claude-account login`);
 	}
+	pi.registerCommand("claude-account", claudeAccountCommand);
 	// We need these settings to know if we're eligible for 1M context on certain models
 	// Validate at the boundary: a non-array here would throw inside every
 	// claudeCodeModelId call and brick the extension at activation.
