@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readFileSync } from "node:fs";
 import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
-import { claudeCodeSettings, loadConfig, markStartupNoticeShown } from "../src/config.js";
+import { accountConfigDir, claudeCodeSettings, loadConfig, markStartupNoticeShown } from "../src/config.js";
 
 function withTempHome(fn) {
 	const oldHome = process.env.HOME;
@@ -31,6 +31,18 @@ describe("claudeCodeSettings", () => {
 
 	it("allows auto-memory to be enabled", () => {
 		assert.deepEqual(claudeCodeSettings({ autoMemoryEnabled: true }), { autoMemoryEnabled: true });
+	});
+});
+
+describe("accountConfigDir", () => {
+	it("maps a name to its own Claude Code config dir under ~/.claude-accounts", () => withTempHome((home) => {
+		assert.equal(accountConfigDir("banx"), join(home, ".claude-accounts", "banx"));
+	}));
+
+	it("rejects names that could resolve to another login", () => {
+		for (const name of ["", "..", "../personal", "a/b", "/tmp/x", ".hidden"]) {
+			assert.throws(() => accountConfigDir(name), /plain name/, name);
+		}
 	});
 });
 

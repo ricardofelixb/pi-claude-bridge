@@ -5,7 +5,7 @@ import { query, type EffortLevel, type SDKMessage, type SettingSource } from "@a
 import type { Base64ImageSource, ContentBlockParam } from "@anthropic-ai/sdk/resources";
 import { Text } from "@earendil-works/pi-tui";
 import { createSession, deleteSession, openSession, repairToolPairing } from "cc-session-io";
-import { appendFileSync, mkdirSync, realpathSync, statSync } from "fs";
+import { appendFileSync, existsSync, mkdirSync, realpathSync, statSync } from "fs";
 import { dirname, join } from "path";
 import { PROVIDER_ID, messageContentToText, convertPiMessages } from "./convert.js";
 import { debugLogPath, diagLogPath } from "./log-paths.js";
@@ -15,7 +15,7 @@ import { verifyWrittenSession as _verifyWrittenSession } from "./session-verify.
 import { extractAllToolResults as _extractAllToolResults, type McpResult } from "./extract-tool-results.js";
 import { QueryContext, ctx } from "./query-state.js";
 import { makePromptStream, userMessage, type PromptStream } from "./prompt-stream.js";
-import { claudeCodeSettings, loadConfig, markStartupNoticeShown, type Config } from "./config.js";
+import { accountConfigDir, claudeCodeSettings, loadConfig, markStartupNoticeShown, type Config } from "./config.js";
 import {
 	collectPromptSkills,
 	projectPromptCapture,
@@ -2378,6 +2378,16 @@ export default function (pi: ExtensionAPI) {
 	const config = loadConfig(process.cwd());
 	debug("loadConfig:", JSON.stringify(config));
 	providerSettings = config.provider ?? {};
+	// Every Claude Code child inherits process.env, and the session paths read it too.
+	// Set even when the login is missing: Claude Code then refuses as not logged in
+	// instead of falling back to the default account.
+	if (providerSettings.account !== undefined) {
+		const dir = accountConfigDir(providerSettings.account);
+		process.env.CLAUDE_CONFIG_DIR = dir;
+		if (!existsSync(dir)) {
+			console.error(`claude-bridge: no login for account "${providerSettings.account}". Run: CLAUDE_CONFIG_DIR=${dir} claude auth login`);
+		}
+	}
 	// We need these settings to know if we're eligible for 1M context on certain models
 	// Validate at the boundary: a non-array here would throw inside every
 	// claudeCodeModelId call and brick the extension at activation.

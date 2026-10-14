@@ -2,6 +2,10 @@
 
 ## UNRELEASED
 
+- **Add: per-project Claude account (`provider.account`)** — a project's `.pi/claude-bridge.json` can name a login, e.g. `"banx"`, and Claude Code runs with `CLAUDE_CONFIG_DIR=~/.claude-accounts/<name>`. A missing login fails as not logged in rather than falling back to the default account; log in with `CLAUDE_CONFIG_DIR=~/.claude-accounts/<name> claude auth login`.
+
+## UNRELEASED
+
 - **Fix: an extension that shrinks the history no longer empties the conversation (#77)** — a pi session's own query with fewer messages than its mirror now rebuilds the mirror from them instead of starting Claude Code with only the latest message. Context folding and billion-context-pi's `compress` shrink pi's history in place without a rewrite event; reentrant queries still start fresh.
 
 ## 0.9.2 — 2026-10-07

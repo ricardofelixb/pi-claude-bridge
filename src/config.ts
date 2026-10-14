@@ -6,6 +6,7 @@
 
 import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { homedir } from "os";
 import { dirname, join } from "path";
 
 export interface Config {
@@ -26,6 +27,10 @@ export interface Config {
 		strictMcpConfig?: boolean;
 		autoMemoryEnabled?: boolean;
 		pathToClaudeCodeExecutable?: string;
+		// Named Claude Code login for this project: runs Claude Code with
+		// CLAUDE_CONFIG_DIR=~/.claude-accounts/<account>, so one repo can bill
+		// another subscription. Unset uses Claude Code's own default login.
+		account?: string;
 		// Subscription plan tier. Setting to "max" enables Opus 4.6 at 1M context
 		plan?: "pro" | "max";
 		// Set to true to opt into metered 1M context usage ("extra usage" in
@@ -50,6 +55,15 @@ export function tryParseJson(path: string): Partial<Config> {
 
 export function claudeCodeSettings(provider: Config["provider"] = {}): { autoMemoryEnabled: boolean } {
 	return { autoMemoryEnabled: provider.autoMemoryEnabled ?? false };
+}
+
+/** The Claude Code config directory holding a named account's login. Throws on a
+ *  name that could escape ~/.claude-accounts, so a typo never picks another login. */
+export function accountConfigDir(account: string): string {
+	if (!/^[\w-][\w.-]*$/.test(account)) {
+		throw new Error(`claude-bridge: provider.account ${JSON.stringify(account)} must be a plain name like "banx"`);
+	}
+	return join(homedir(), ".claude-accounts", account);
 }
 
 export function globalConfigPath(): string {
