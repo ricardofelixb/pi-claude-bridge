@@ -5,7 +5,7 @@ import { query, type EffortLevel, type SDKMessage, type SettingSource } from "@a
 import type { Base64ImageSource, ContentBlockParam } from "@anthropic-ai/sdk/resources";
 import { Text } from "@earendil-works/pi-tui";
 import { createSession, deleteSession, openSession, repairToolPairing } from "cc-session-io";
-import { appendFileSync, mkdirSync, realpathSync, statSync } from "fs";
+import { appendFileSync, existsSync, mkdirSync, realpathSync, statSync } from "fs";
 import { dirname, join } from "path";
 import { PROVIDER_ID, messageContentToText, convertPiMessages } from "./convert.js";
 import { debugLogPath, diagLogPath } from "./log-paths.js";
@@ -15,6 +15,7 @@ import { verifyWrittenSession as _verifyWrittenSession } from "./session-verify.
 import { extractAllToolResults as _extractAllToolResults, type McpResult } from "./extract-tool-results.js";
 import { QueryContext, ctx } from "./query-state.js";
 import { makePromptStream, userMessage, type PromptStream } from "./prompt-stream.js";
+import { applyAccount, claudeAccountCommand } from "./account.js";
 import { claudeCodeSettings, loadConfig, markStartupNoticeShown, type Config } from "./config.js";
 import {
 	collectPromptSkills,
@@ -743,6 +744,7 @@ function debugSessionPaths(label: string, cwd: string, jsonlPath: string): void 
 	customToolNameToSdk?: Map<string, string>,
 	modelId?: string,
 	piSessionId?: string | null,
+	reentrant = false,
 ): SyncResult {
 	// System messages are pi's transcript representation of prompt and tool state, not
 	// conversation history — they are never imported into a CC session, so exclude them from
@@ -782,8 +784,8 @@ function debugSessionPaths(label: string, cwd: string, jsonlPath: string): void 
 	// incoming history cannot be a continuation, so start clean and preserve.
 	// Historically this also caught reentrant subagents (a subagent's priors are
 	// shorter than the parent's cursor); with per-session mirrors it now catches
-	// the pruned-context shapes on a session's own bucket, and the non-isolated
-	// AskClaude path on the "(none)" bucket. The captured ephemeral session is
+	// reentrant queries on a session's own bucket, and the non-isolated AskClaude
+	// path on the "(none)" bucket. The captured ephemeral session is
 	// deleted once its query completes (see preserveSharedSession in the
 	// completion handler).
 	//
@@ -793,7 +795,12 @@ function debugSessionPaths(label: string, cwd: string, jsonlPath: string): void 
 	// Only reachable when needsRebuild is false — user-facing history rewrites
 	// (/compact, session_tree, /new, fork) always set needsRebuild or clear
 	// sharedSession before the next syncSharedSession call.
-	if (sharedSession && !sharedSession.needsRebuild && priorMessages.length < sharedSession.cursor) {
+	//
+	// A pi session's own non-reentrant query is neither of those: its shorter
+	// history was rewritten by an extension that fires no event pi exposes
+	// (context folding, billion-context-pi's compress), so it REBUILDs from what
+	// pi sends now. Starting clean dropped the whole conversation (issue #77).
+	if (sharedSession && !sharedSession.needsRebuild && priorMessages.length < sharedSession.cursor && (reentrant || !piSessionId)) {
 		debug(`Case 1 synthetic: clean start for shorter context, preserving shared session ${sharedSession.sessionId.slice(0, 8)}, cursor=${sharedSession.cursor}`);
 		debug(`syncResult: path=clean-start preserve-shared sessionId=${sharedSession.sessionId} cursor=${sharedSession.cursor}`);
 		return { sessionId: null, preserveSharedSession: true };
@@ -1898,7 +1905,7 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 	// Which pi session this query serves — the attribution key for history
 	// rewrites (session_compact / session_tree) and for SessionState above.
 	const piSessionId = options?.sessionId ?? null;
-	const syncResult = syncSharedSession(context.messages, cwd, customToolNameToSdk, cliModel, piSessionId);
+	const syncResult = syncSharedSession(context.messages, cwd, customToolNameToSdk, cliModel, piSessionId, isReentrant);
 	// This query starts from the history pi has now: consume this session's
 	// armed rewrite — a sibling pi session's stays armed for its own queries.
 	if (piSessionId) historyRewrittenBySession.delete(piSessionId);
@@ -2372,6 +2379,14 @@ export default function (pi: ExtensionAPI) {
 	const config = loadConfig(process.cwd());
 	debug("loadConfig:", JSON.stringify(config));
 	providerSettings = config.provider ?? {};
+	// Every Claude Code child inherits process.env, and the session paths read it too.
+	// Set even when the login is missing: Claude Code then refuses as not logged in
+	// instead of falling back to the default account.
+	const accountDir = applyAccount(providerSettings.account);
+	if (providerSettings.account !== undefined && accountDir !== undefined && !existsSync(accountDir)) {
+		console.error(`claude-bridge: account "${providerSettings.account}" is not signed in. Run /claude-account login`);
+	}
+	pi.registerCommand("claude-account", claudeAccountCommand);
 	// We need these settings to know if we're eligible for 1M context on certain models
 	// Validate at the boundary: a non-array here would throw inside every
 	// claudeCodeModelId call and brick the extension at activation.

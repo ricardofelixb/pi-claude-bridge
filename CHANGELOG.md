@@ -1,5 +1,13 @@
 # Changelog
 
+## UNRELEASED
+
+- **Add: per-project Claude account (`provider.account`)** — a project's `.pi/claude-bridge.json` can name a login, e.g. `"banx"`, and Claude Code runs with `CLAUDE_CONFIG_DIR=~/.claude-accounts/<name>`. A missing login fails as not logged in rather than falling back to the default account; `/claude-account` shows the project's account and who it is signed in as, `/claude-account <name>` or `/claude-account default` switches it (keeping the file out of git) and reloads, and `/claude-account login` signs in from inside pi.
+
+## UNRELEASED
+
+- **Fix: an extension that shrinks the history no longer empties the conversation (#77)** — a pi session's own query with fewer messages than its mirror now rebuilds the mirror from them instead of starting Claude Code with only the latest message. Context folding and billion-context-pi's `compress` shrink pi's history in place without a rewrite event; reentrant queries still start fresh.
+
 ## 0.9.2 — 2026-10-07
 
 - **Fix: synthetic failure notices no longer stream as assistant output (#162)** — keeps pre-output failover working for consumers like pi-model-fallback-alias; the notice text stays on the failed turn's error event. A notice following a stalled stream also drops the dead stream's abandoned partial blocks.
