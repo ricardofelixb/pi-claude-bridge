@@ -1,6 +1,7 @@
 // User-facing extension config. Loaded once at extension registration from
 // the global agent dir (getAgentDir(), e.g. ~/.pi/agent/claude-bridge.json)
-// and the project Pi config directory, project overriding global. Missing or
+// and the project Pi config directory, project overriding global except for
+// `provider`, which is global only apart from `provider.account`. Missing or
 // unparseable files are ignored (error to console.error, empty object
 // returned) so the extension always starts.
 
@@ -12,6 +13,8 @@ import { dirname, join } from "path";
 export interface Config {
 	/** Date (YYYY-MM-DD) the one-time startup notice was shown. Written by the extension, not the user. */
 	startupNoticeShown?: string;
+	/** Date (YYYY-MM-DD) the AskClaude deprecation notice was shown. Written by the extension, not the user. */
+	askClaudeDeprecationShown?: string;
 	askClaude?: {
 		enabled?: boolean;
 		name?: string;
@@ -95,12 +98,37 @@ export function markStartupNoticeShown(): string {
 	return path;
 }
 
+/** Record when the AskClaude deprecation notice was shown in the global config, preserving every
+ *  other field. Returns the config path either way. */
+export function markAskClaudeDeprecationNoticeShown(): string {
+	const path = globalConfigPath();
+	let existing: Partial<Config> = {};
+	if (existsSync(path)) {
+		try {
+			existing = JSON.parse(readFileSync(path, "utf-8"));
+		} catch (e) {
+			console.error(`claude-bridge: leaving ${path} alone, it does not parse: ${e}`);
+			return path;
+		}
+	}
+	// Match startupNoticeShown's local YYYY-MM-DD date format.
+	const next = { ...existing, askClaudeDeprecationShown: new Date().toLocaleDateString("en-CA") };
+	mkdirSync(dirname(path), { recursive: true });
+	writeFileSync(path, `${JSON.stringify(next, null, 2)}\n`);
+	return path;
+}
+
 export function loadConfig(cwd: string): Config {
 	const global = tryParseJson(globalConfigPath());
 	const project = tryParseJson(join(cwd, CONFIG_DIR_NAME, "claude-bridge.json"));
 	return {
 		startupNoticeShown: project.startupNoticeShown ?? global.startupNoticeShown,
+		askClaudeDeprecationShown: project.askClaudeDeprecationShown ?? global.askClaudeDeprecationShown,
 		askClaude: { ...global.askClaude, ...project.askClaude },
-		provider: { ...global.provider, ...project.provider },
+		// Global only: a cloned repo could otherwise point the bridge at its own
+		// Claude Code executable or turn on metered billing. The exception is
+		// `account`, a plain name for a login already under ~/.claude-accounts, which
+		// is how a project picks its account (see account.ts).
+		provider: { ...global.provider, ...(project.provider?.account !== undefined ? { account: project.provider.account } : {}) },
 	};
 }
