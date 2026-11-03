@@ -68,6 +68,17 @@ describe("digest session decisions", () => {
 		assert.deepEqual(synced.recorded.digests, digestMessages(rewrite));
 		assert.deepEqual(readFileSync(session.jsonlPath), before);
 	});
+	// An extension that shrinks a session's history in place (context folding,
+	// billion-context-pi's compress) fires no rewrite event. The next query must
+	// carry the shortened history, not start with none (issue #77).
+	it("imports a compressed history instead of starting with none", () => {
+		seed([user("a"), say("b"), user("c"), say("d"), user("e"), say("f")]);
+		const compressed = [user("[summary] earlier work"), say("Noted.")];
+		const synced = sync([...compressed, user("next")]);
+		assert.ok(synced.sessionId);
+		assert.deepEqual(synced.recorded.digests, digestMessages(compressed));
+		assert.equal(openSession({ sessionId: synced.sessionId, projectPath: cwd }).messages.length, 2);
+	});
 	it("model changes rotate even for equal history", () => {
 		const priors = [user("hi"), say("hello")];
 		const { session } = seed(priors);
