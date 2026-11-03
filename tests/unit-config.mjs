@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { readFileSync } from "node:fs";
 import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { accountConfigDir, claudeCodeSettings, loadConfig, markStartupNoticeShown } from "../src/config.js";
+import { markAskClaudeDeprecationNoticeShown } from "../src/config.js";
 
 function withTempHome(fn) {
 	const oldHome = process.env.HOME;
@@ -47,19 +48,20 @@ describe("accountConfigDir", () => {
 });
 
 describe("loadConfig", () => {
-	it("loads project config from Pi's configured project directory", () => withTempHome(() => {
+	it("loads project askClaude config but never project provider settings", () => withTempHome(() => {
 		const cwd = mkdtempSync(join(tmpdir(), "claude-bridge-project-"));
 		try {
 			const configDir = join(cwd, CONFIG_DIR_NAME);
 			mkdirSync(configDir, { recursive: true });
 			writeFileSync(join(configDir, "claude-bridge.json"), JSON.stringify({
-				provider: { plan: "max" },
+				provider: { plan: "max", pathToClaudeCodeExecutable: join(cwd, "evil") },
 				askClaude: { enabled: false },
 			}));
 
 			assert.deepEqual(loadConfig(cwd), {
 				startupNoticeShown: undefined,
-				provider: { plan: "max" },
+				askClaudeDeprecationShown: undefined,
+				provider: {},
 				askClaude: { enabled: false },
 			});
 		} finally {
@@ -67,7 +69,7 @@ describe("loadConfig", () => {
 		}
 	}));
 
-	it("merges project config over global config", () => withTempHome((home) => {
+	it("merges project askClaude config over global; provider comes from global only", () => withTempHome((home) => {
 		const cwd = mkdtempSync(join(tmpdir(), "claude-bridge-project-"));
 		try {
 			const globalDir = getAgentDir();
@@ -85,9 +87,28 @@ describe("loadConfig", () => {
 
 			assert.deepEqual(loadConfig(cwd), {
 				startupNoticeShown: undefined,
-				provider: { plan: "max", strictMcpConfig: true, autoMemoryEnabled: true },
+				askClaudeDeprecationShown: undefined,
+				provider: { plan: "pro", strictMcpConfig: true },
 				askClaude: { enabled: false, defaultMode: "read" },
 			});
+		} finally {
+			rmSync(cwd, { recursive: true, force: true });
+		}
+	}));
+
+	it("lets a project name its Claude account but nothing else in provider", () => withTempHome(() => {
+		const cwd = mkdtempSync(join(tmpdir(), "claude-bridge-project-"));
+		try {
+			const globalDir = getAgentDir();
+			const projectDir = join(cwd, CONFIG_DIR_NAME);
+			mkdirSync(globalDir, { recursive: true });
+			mkdirSync(projectDir, { recursive: true });
+			writeFileSync(join(globalDir, "claude-bridge.json"), JSON.stringify({ provider: { plan: "pro", account: "personal" } }));
+			writeFileSync(join(projectDir, "claude-bridge.json"), JSON.stringify({
+				provider: { plan: "max", account: "banx", pathToClaudeCodeExecutable: join(cwd, "evil") },
+			}));
+
+			assert.deepEqual(loadConfig(cwd).provider, { plan: "pro", account: "banx" });
 		} finally {
 			rmSync(cwd, { recursive: true, force: true });
 		}
@@ -113,6 +134,18 @@ describe("loadConfig", () => {
 		} finally {
 			rmSync(cwd, { recursive: true, force: true });
 		}
+	}));
+
+	it("markAskClaudeDeprecationNoticeShown records today's date without dropping settings", () => withTempHome(() => {
+		const globalDir = getAgentDir();
+		mkdirSync(globalDir, { recursive: true });
+		const path = join(globalDir, "claude-bridge.json");
+		writeFileSync(path, JSON.stringify({ askClaude: { enabled: true } }));
+
+		markAskClaudeDeprecationNoticeShown();
+		const written = JSON.parse(readFileSync(path, "utf-8"));
+		assert.match(written.askClaudeDeprecationShown, /^\d{4}-\d{2}-\d{2}$/);
+		assert.deepEqual(written.askClaude, { enabled: true });
 	}));
 
 	it("markStartupNoticeShown leaves an unparseable config untouched", () => withTempHome(() => {
@@ -149,6 +182,7 @@ describe("loadConfig", () => {
 
 			assert.deepEqual(loadConfig(cwd), {
 				startupNoticeShown: undefined,
+				askClaudeDeprecationShown: undefined,
 				provider: { plan: "max" },
 				askClaude: {},
 			});
