@@ -128,6 +128,14 @@ function loginStatus(exe: string, dir: string | undefined): Promise<LoginStatus>
 	});
 }
 
+function signOut(exe: string, dir: string | undefined): Promise<boolean> {
+	return new Promise((resolve) => {
+		const child = spawn(exe, ["auth", "logout"], { env: childEnv(dir), stdio: "ignore" });
+		child.on("error", () => resolve(false));
+		child.on("close", (code) => resolve(code === 0));
+	});
+}
+
 function describe(status: LoginStatus): string {
 	if (!status.loggedIn) return "not signed in";
 	return [status.email, status.orgName].filter(Boolean).join(", ") || "signed in";
@@ -180,12 +188,12 @@ function knownAccounts(): string[] {
 	}
 }
 
-const USAGE = "Usage: /claude-account [<name> | default | login]";
+const USAGE = "Usage: /claude-account [<name> | default | login | logout]";
 
 export const claudeAccountCommand = {
 	description: "Show, switch or sign in to this project's Claude account",
 	getArgumentCompletions(prefix: string) {
-		const items = ["default", "login", ...knownAccounts()]
+		const items = ["default", "login", "logout", ...knownAccounts()]
 			.filter((value) => value.startsWith(prefix.trim()))
 			.map((value) => ({ value, label: value }));
 		return items.length ? items : null;
@@ -208,6 +216,13 @@ export const claudeAccountCommand = {
 			return;
 		}
 
+		if (arg === "logout") {
+			if (!await ctx.ui.confirm("Claude account", `Sign out of ${label(current)}?`)) return;
+			const ok = await signOut(exe, accountDir(current));
+			ctx.ui.notify(ok ? `Signed out of ${label(current)}` : `Sign-out of ${label(current)} failed`, ok ? "info" : "error");
+			return;
+		}
+
 		if (/\s/.test(arg)) {
 			ctx.ui.notify(USAGE, "warning");
 			return;
@@ -215,6 +230,12 @@ export const claudeAccountCommand = {
 		const account = arg === "default" ? undefined : arg;
 		let dir: string | undefined;
 		try {
+			// A typo must not become an account: Claude Code creates the folder on first use.
+			if (account !== undefined && !existsSync(accountConfigDir(account))
+				&& !await ctx.ui.confirm("Claude account", `No account named ${account} yet. Create it?`)) {
+				ctx.ui.notify(USAGE, "info");
+				return;
+			}
 			writeProjectAccount(ctx.cwd, account);
 			if (account !== undefined) {
 				excludeFromGit(ctx.cwd);
