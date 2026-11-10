@@ -50,7 +50,7 @@ pi's tools are bridged to Claude Code, but you continue to use pi as usual:
 
 ## Configuration
 
-Create `~/.pi/agent/claude-bridge.json` (global). The project Pi config directory, usually `.pi/claude-bridge.json`, is read only for `provider.account` (below), which just names a login already under `~/.claude-accounts`; everything else in `provider` comes from the global file, so a cloned repo can't point the bridge at its own executable or turn on metered billing.
+Config: `~/.pi/agent/claude-bridge.json` (global) or the project Pi config directory, usually `.pi/claude-bridge.json` (project; read only for `provider.account`). `provider` settings are read only from the global file, so a cloned repo can't point the bridge at its own executable or turn on metered billing; the one exception is `provider.account` (below), which only names a login already under `~/.claude-accounts`.
 
 ```json
 {

@@ -1,9 +1,10 @@
 // User-facing extension config. Loaded once at extension registration from
 // the global agent dir (getAgentDir(), e.g. ~/.pi/agent/claude-bridge.json).
-// The project Pi config directory contributes only `provider.account`: a cloned
-// repo could otherwise point the bridge at its own Claude Code executable or
-// turn on metered billing. A missing or unparseable file is ignored (error to
-// console.error, empty object returned) so the extension always starts.
+// and the project Pi config directory, which only names a login for the project:
+// `provider`, which is global only apart from `provider.account`. Missing or
+// unparseable files are ignored (error to console.error, empty object
+// returned) so the extension always starts. A cloned repo could otherwise point
+// the bridge at its own Claude Code executable or turn on metered billing.
 
 import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { existsSync, readFileSync } from "fs";
