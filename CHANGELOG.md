@@ -1,5 +1,9 @@
 # Changelog
 
+## UNRELEASED
+
+- **Add: per-project Claude account (`provider.account`)** — a project's `.pi/claude-bridge.json` can name a login, e.g. `"banx"`, and Claude Code runs with `CLAUDE_CONFIG_DIR=~/.claude-accounts/<name>`. A missing login fails as not logged in rather than falling back to the default account; `/claude-account` shows the project's account and who it is signed in as, `/claude-account <name>` or `/claude-account default` switches it (keeping the file out of git) and reloads, `/claude-account login` signs in from inside pi (asking before it creates a new login folder), and `/claude-account logout` signs the project's account out.
+
 ## 0.12.0 — 2026-11-10
 
 - **Add: Claude Fable 5.2 with 1M context** — Agent SDK bumped to 0.3.321 (Claude Code 2.1.321), which knows Fable 5.2; AskClaude's too.
@@ -39,7 +43,6 @@
 - **Fix: bash default timeout broke the prompt cache on rebuild (#203)** — The 120s default now applies when the command runs instead of being saved in pi's history, so rebuilt sessions match Claude Code's. A `background: true` call does not receive the default. Thanks @cad0p, @superninjv and @vindavs.
 - **Bump: Claude Agent SDK 0.3.308 (Claude Code 2.1.308)** — Claude Code's new per-request log in session files is turned off; it made them about a third larger.
 - **Debug: opt-in cache trace** — `CLAUDE_BRIDGE_TRACE_DIR` logs session decisions to help diagnose prompt-cache loss. See `diag/CACHE.md`.
-- **Add: per-project Claude account (`provider.account`)** — a project's `.pi/claude-bridge.json` can name a login, e.g. `"banx"`, and Claude Code runs with `CLAUDE_CONFIG_DIR=~/.claude-accounts/<name>`. A missing login fails as not logged in rather than falling back to the default account; `/claude-account` shows the project's account and who it is signed in as, `/claude-account <name>` or `/claude-account default` switches it (keeping the file out of git) and reloads, and `/claude-account login` signs in from inside pi.
 
 ## 0.9.3 — 2026-10-13
 
