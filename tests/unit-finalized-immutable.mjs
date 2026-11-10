@@ -17,7 +17,6 @@ let providerConfig;
 mod.default({
 	on: () => {},
 	registerProvider: (_name, config) => { providerConfig = config; },
-	registerTool: () => {},
 	registerCommand: () => {},
 });
 const streamSimple = providerConfig.streamSimple;
