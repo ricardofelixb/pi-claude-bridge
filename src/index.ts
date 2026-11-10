@@ -11,7 +11,7 @@ import { PROVIDER_ID, messageContentToText } from "./convert.js";
 import { QueryProcess } from "./query-process.js";
 import { readTranscript, recordedToolResults, resolveRecordingCut, savePrefixSession } from "./session-transcript.js";
 import { debugLogPath, diagLogPath } from "./log-paths.js";
-import { applyLongContext, buildModels, claudeCodeModelId, type LongContextSettings } from "./models.js";
+import { applyLongContext, buildModels, claudeCodeModelId, extraUsageByChoice, type LongContextSettings } from "./models.js";
 import { MCP_SERVER_NAME, MCP_TOOL_PREFIX } from "./skills.js";
 import { verifyWrittenSession as _verifyWrittenSession } from "./session-verify.js";
 import { extractAllToolResults as _extractAllToolResults, type McpResult } from "./extract-tool-results.js";
@@ -228,6 +228,47 @@ function turnStart(messages: Context["messages"]): number {
 	return i;
 }
 
+/** The user messages each pi session's last request ended with, to notice when pi
+ *  never keeps them: an extension's `context` hook appending a message to every
+ *  request (issue #246). Claude Code records each copy and puts its cache marker
+ *  on it, so cutting the copy out on the next request leaves nothing cached past
+ *  the system prompt. pi hands the provider a plain user message, so the warning
+ *  can only quote it, not name the extension. */
+const sentTurns = new Map<string, { index: number; digests: string[]; texts: string[]; dropped: number }>();
+const DROPPED_TURNS_BEFORE_WARNING = 3;
+
+function noticeDroppedTurn(piSessionId: string, messages: Context["messages"]): void {
+	const start = turnStart(messages);
+	const previous = sentTurns.get(piSessionId);
+	const rewritten = historyRewrittenBySession.has(piSessionId);
+	// A retry neither adds to nor breaks the streak; a rewrite (compaction, /tree) resets it.
+	let dropped = previous && start === previous.index && !rewritten ? previous.dropped : 0;
+	if (previous && start > previous.index && !rewritten) {
+		const missing = previous.digests.findIndex((digest, i) => {
+			const now = messages[previous.index + i];
+			return now?.role !== "user" || digestMessage(now) !== digest;
+		});
+		if (missing !== -1) {
+			dropped = previous.dropped + 1;
+			const text = previous.texts[missing].replace(/\s+/g, " ").trim();
+			debug(`provider: pi did not keep a message the previous request sent (${dropped} in a row): ${text.slice(0, 80)} ${sessionTag(piSessionId)}`);
+			if (dropped === DROPPED_TURNS_BEFORE_WARNING) {
+				const quote = text.length > 60 ? `${text.slice(0, 60)}...` : text;
+				piUI?.notify(`Claude bridge: an extension adds a message to every request without saving it ("${quote}"), so every request rewrites the whole prompt cache. `
+					+ "Disable that extension, or ask its author to save the message with pi.sendMessage instead of adding it in a context hook. "
+					+ "See \"Extensions that add a message to every request\" in the pi-claude-bridge README.", "warning");
+			}
+		}
+	}
+	const turn = messages.slice(start) as UserMessage[];
+	sentTurns.set(piSessionId, {
+		index: start,
+		digests: turn.map(digestMessage),
+		texts: turn.map((m) => (typeof m.content === "string" ? m.content : messageContentToText(m.content))),
+		dropped,
+	});
+}
+
 /** Extract the current user turn as a prompt string. Returns null if the last message is not a user message. */
 function extractUserPrompt(messages: Context["messages"]): string | null {
 	const turn = messages.slice(turnStart(messages)) as UserMessage[];
@@ -307,6 +348,10 @@ function describeRateLimitFailure(rejection: { rateLimitType?: string; resetsAt?
 	const resets = rejection.resetsAt ? ` — resets ${new Date(rejection.resetsAt * 1000).toLocaleTimeString()}` : ""; // resetsAt: Unix seconds (unit undocumented in the SDK; observed)
 	return `Claude quota exceeded — rate limit${kind}${resets}: ${failure}`;
 }
+
+/** Why Anthropic would bill or refuse Extra Usage with the plan limit not reached: it
+ *  classifies some system prompts as a third-party app's (diag/EXTRA-USAGE-400.md). */
+const THIRD_PARTY_SUSPECT = "no plan limit was reported as reached, so Anthropic may have read the system prompt as a third-party app";
 
 /** Reports to the call that owns the open stream, before its next event, as pi's own
  *  providers do. A failing consumer must not end the turn it is observing. */
@@ -623,7 +668,9 @@ export const __test = {
 			deleteSessionState(piSessionId);
 		}
 		historyRewrittenBySession.clear();
+		sentTurns.clear();
 	},
+	noticeDroppedTurn,
 	/** A restart: drop memory, keep every persisted pointer. */
 	forgetSessionMemory() {
 		sharedSessions.clear();
@@ -886,7 +933,7 @@ const VALID_EFFORTS = new Set<string>(["low", "medium", "high", "xhigh", "max"])
 // level CC accepts.
 function effortForReasoning(model: Model<any>, reasoning: string | undefined): EffortLevel | undefined {
 	if (!reasoning) return undefined;
-	const mapped = model.thinkingLevelMap?.[reasoning];
+	const mapped = thinkingLevelMap(model)?.[reasoning];
 	if (mapped === undefined) return REASONING_TO_EFFORT[reasoning];
 	return VALID_EFFORTS.has(mapped as EffortLevel) ? mapped as EffortLevel : undefined;
 }
@@ -896,8 +943,14 @@ function effortForReasoning(model: Model<any>, reasoning: string | undefined): E
 // provider does: for reasoning models, unless the model's thinkingLevelMap marks
 // "off" unsupported (null), as on models that always think.
 function thinkingForReasoning(model: Model<any>, reasoning: string | undefined): ThinkingConfig | undefined {
-	if (reasoning || !model.reasoning || model.thinkingLevelMap?.off === null) return undefined;
+	if (reasoning || !model.reasoning || thinkingLevelMap(model)?.off === null) return undefined;
 	return { type: "disabled" };
+}
+
+// pi-ai derives ThinkingLevelMap from a pi-schema schema, which types as `unknown`
+// without strictNullChecks (off in this repo).
+function thinkingLevelMap(model: Model<any>): Partial<Record<string, string | null>> | undefined {
+	return model.thinkingLevelMap as Partial<Record<string, string | null>> | undefined;
 }
 
 // --- Provider helpers: misc ---
@@ -1029,9 +1082,12 @@ function tapRecording(message: SDKMessage, names: Map<string, string>, c: QueryC
 	if ((message.type === "assistant" && message.parent_tool_use_id === null && message.message.model !== "<synthetic>")
 		|| (message.type === "stream_event" && message.parent_tool_use_id === null && ["content_block_start", "content_block_delta"].includes(message.event.type))) {
 		c.recording.assistantObserved();
-		// CC persists a turn's opening input before calling the API but never
-		// replays one holding its own tags (e.g. <task-notification>), so the turn's
+		// CC persists a turn's opening input before calling the API. CC 2.1.308 never
+		// replayed one holding its own tags (e.g. <task-notification>), so the turn's
 		// first output incorporates it.
+		// TODO: remove with QueryContext.turnOpener once an older CC set through
+		// provider.pathToClaudeCodeExecutable needn't be supported; the bundled
+		// CC 2.1.321 replays these inputs.
 		if (c.turnOpener && incorporate(c, c.turnOpener)) debug(`recording: turn opener ${c.turnOpener} was never replayed; its first output acknowledges it`);
 		c.turnOpener = undefined;
 	}
@@ -1395,6 +1451,9 @@ async function consumeQuery(
 				if (queryCtx.rateLimitRejection) {
 					resultError = describeRateLimitFailure(queryCtx.rateLimitRejection, resultError);
 					queryCtx.rateLimitRejection = null;
+				} else if (resultError.includes("out of extra usage") && !extraUsageByChoice(model, longContextSettings)) {
+					// Extra Usage off or empty, and no plan window was rejected first.
+					resultError += ` (${THIRD_PARTY_SUSPECT})`;
 				}
 				debug(`consumeQuery: error result, subtype=${message.subtype}, error=${resultError}`);
 				if (queryCtx.turnOutput && queryCtx.currentPiStream) {
@@ -1414,6 +1473,13 @@ async function consumeQuery(
 			if (info) queryCtx.heldRateLimit = info;
 			await reportHeldRateLimit(queryCtx, model);
 			if (wasAborted() || queryCtx.discarded) break;
+			// CC sets isUsingOverage only when a rejected plan window is served from Extra
+			// Usage; overageInUse alone means the request was billed there anyway.
+			if (info?.overageInUse === true && info.status !== "rejected" && info.isUsingOverage !== true
+				&& !extraUsageByChoice(model, longContextSettings) && !queryCtx.warnedUnplannedOverage) {
+				queryCtx.warnedUnplannedOverage = true;
+				piUI?.notify(`Claude Code request billed to Extra Usage: ${THIRD_PARTY_SUSPECT}, or this model needs usage credits on your plan`, "warning");
+			}
 			if (info?.status === "rejected") {
 				// Held so the failure Claude Code sends next can be named as a rate limit.
 				queryCtx.rateLimitRejection = info;
@@ -1647,6 +1713,8 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 		return isolatedStreamFn(model, context, options, traceCallId);
 	}
 
+	if (options?.sessionId) noticeDroppedTurn(options.sessionId, context.messages);
+
 	const stream = createAssistantMessageEventStream();
 	// Report a failure before any query exists on the stream, as pi-ai's provider
 	// contract expects, rather than as a synchronous exception.
@@ -1767,7 +1835,7 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 	// Build from what Pi loaded for this run, so `--no-context-files` and
 	// `--no-skills` reach Claude Code by leaving nothing to forward. A sub-agent's
 	// custom override embeds its parent's assembled Pi prompt; recursive projection
-	// replaces that exact inherited prompt with its already-safe portable parts.
+	// replaces that exact inherited prompt with its portable parts.
 	// Derive the key from the transcript replay (toBridgeContext), NOT from the
 	// recorded keys: under a forced prompt the transcript head is projected via
 	// transformContext after turn_start, so ctx.getSystemPrompt() is not the head.
@@ -1783,9 +1851,9 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 			: undefined;
 	} catch (err) {
 		// resolveOrDerive and projectPromptCapture throw to stop a turn that would lose
-		// its instructions or leak pi's harness text. Report it on the stream, as pi-ai's
-		// provider contract expects, so any caller — not only pi's agent loop, which
-		// catches a throw — sees a failed turn rather than a synchronous exception.
+		// its instructions. Report it on the stream, as pi-ai's provider contract
+		// expects, so any caller — not only pi's agent loop, which catches a throw —
+		// sees a failed turn rather than a synchronous exception.
 		diagDump("prompt_capture_unresolved", {
 			promptChars: context.systemPrompt?.length ?? 0,
 			knownKeys: promptCaptures.size,
@@ -2165,7 +2233,7 @@ export default function (pi: ExtensionAPI) {
 	};
 	const registeredModels = applyLongContext(MODELS, longContextSettings);
 	if (registeredModels.length === 0) {
-		console.error("claude-bridge: no models available from pi-ai's anthropic catalog — update @earendil-works/pi-ai (requires >=0.86.1)");
+		console.error("claude-bridge: no models available from pi-ai's anthropic catalog — update @earendil-works/pi-ai (requires >=1.5.1)");
 	}
 
 	// Pi session lifecycle events: drop the stream registration
@@ -2243,9 +2311,8 @@ export default function (pi: ExtensionAPI) {
 	// agent_start (verified: before_agent_start=10,988 chars vs agent_start/query=23,479).
 	// A subagent embeds the widened parent prompt verbatim (pi-subagents reads
 	// ctx.getSystemPrompt() at dispatch), so unless the widened prompt is a capture key
-	// too, the child's turn resolves against nothing, falls to a verbatim side request,
-	// and ships pi's harness — tripping the server's third-party plan-eligibility check
-	// ("out of extra usage"). Recording it here, before the query, restores the match.
+	// too, the child's turn resolves against nothing and fails. Recording it here, before
+	// the query, restores the match.
 	//
 	// agent_start also captures a handler-returned forceSystemPrompt, which
 	// buildSystemPrompt renders verbatim.
