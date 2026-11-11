@@ -16,7 +16,7 @@ process.env.CLAUDE_BRIDGE_DEBUG = "1";
 const mod = await import("../src/index.js");
 const handlers = {};
 let provider;
-mod.default({ on: (name, fn) => { (handlers[name] ??= []).push(fn); }, registerProvider: (_id, value) => { provider = value; } });
+mod.default({ on: (name, fn) => { (handlers[name] ??= []).push(fn); }, registerProvider: (_id, value) => { provider = value; }, registerCommand: () => {} });
 const model = provider.models[0];
 const tools = ["probe", "fast", "Shout"].map((name) => ({ name, description: name, parameters: { type: "object", properties: { path: { type: "string" } } } }));
 const cwd = mkdtempSync(join(tmpdir(), "cc-rejected-tool-call-"));
