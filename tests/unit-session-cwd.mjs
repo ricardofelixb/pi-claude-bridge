@@ -45,7 +45,6 @@ describe("streamSimple", () => {
 		activate({
 			on: (name, fn) => { (handlers[name] ??= []).push(fn); },
 			registerProvider: (_name, config) => { providerConfig = config; },
-			registerTool: () => {},
 			registerCommand: () => {},
 		});
 		for (const fn of handlers.session_start) fn({}, { cwd: sessionCwd, sessionManager: { getSessionId: () => "s-web" } });

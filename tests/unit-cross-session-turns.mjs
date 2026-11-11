@@ -1,16 +1,13 @@
 // Behavioral provider sequences with a scripted external SDK and real transcripts.
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { createSession, getSessionPath } from "cc-session-io";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import { digestMessages } from "../src/message-digests.js";
 import { copyRecording } from "../src/session-sync.js";
 
-const root = mkdtempSync(join(tmpdir(), "cross-session-"));
-process.env.CLAUDE_CONFIG_DIR = root;
-process.on("exit", () => rmSync(root, { recursive: true, force: true }));
+const root = process.env.CLAUDE_CONFIG_DIR;
 const mod = await import("../src/index.js");
 const { __test } = mod;
 const { setQuery, getSharedSession, resetSharedSession } = __test;
@@ -67,6 +64,8 @@ beforeEach(() => {
 			if (script.tool) yield sdkAssistant([{ type: "tool_use", id: script.tool, name: "mcp__custom-tools__read", input: { path: "a" } }], `msg_${script.tool}`);
 			if (script.wait) await script.wait;
 			if (script.result) {
+				// Claude Code calls the MCP handler before writing an accepted call's result.
+				for (const c of __test.activeQueryContexts) c.dispatchedToolCalls.add(script.result);
 				const value = record("user", [{ type: "tool_result", tool_use_id: script.result, content: "file" }]);
 				yield { type: "user", parent_tool_use_id: null, uuid: value.uuid, message: value.message };
 			}

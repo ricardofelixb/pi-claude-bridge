@@ -1,9 +1,9 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, existsSync, unlinkSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, existsSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createSession, openSession } from "cc-session-io";
+import { createSession, getSessionPath, openSession } from "cc-session-io";
 import { stateFor } from "./lib/session-state.mjs";
 import { compareHistory, copyRecording, importHistory, LiveRecording, validateRecording } from "../src/session-sync.js";
 import { digestMessages } from "../src/message-digests.js";
@@ -30,7 +30,7 @@ afterEach(() => {
 	else process.env.CLAUDE_CONFIG_DIR = oldClaudeDir;
 	rmSync(root, { recursive: true, force: true });
 });
-const sync = (messages, model = "sonnet", sid = "pi", path = cwd) => __test.syncSharedSession(messages, path, undefined, model, sid);
+const sync = (messages, model = "sonnet", sid = "pi", path = cwd) => __test.syncSharedSession(messages, path, new Map(), model, sid, undefined, "");
 function seed(messages, extra = {}) {
 	const session = createSession({ projectPath: cwd, model: "sonnet" });
 	const state = stateFor(session, messages, "sonnet", extra);
@@ -86,14 +86,22 @@ describe("digest session decisions", () => {
 		assert.notEqual(synced.sessionId, session.sessionId);
 		assert.equal(__test.getSharedSession("pi").model, "sonnet", "the prior state stays until live progress");
 	});
+	it("a changed system prompt append imports pi's history; an unchanged one resumes", () => {
+		const priors = [user("hi"), say("hello")];
+		const { session } = seed(priors, { promptDigest: "p1" });
+		const next = [...priors, user("next")];
+		const withPrompt = (digest) => __test.syncSharedSession(next, cwd, new Map(), "sonnet", "pi", undefined, digest);
+		assert.equal(withPrompt("p1").sessionId, session.sessionId);
+		const changed = withPrompt("p2");
+		assert.notEqual(changed.sessionId, session.sessionId);
+		assert.equal(changed.forkAt, undefined, "a fork would keep CC's recorded prompt");
+	});
 	it("unattributed calls import independently and never write provider state", () => {
 		const priors = [user("hi"), say("hello")];
 		const { session, state } = seed(priors);
-		__test.setSharedSession(null, state);
 		const synced = sync([...priors, user("next")], "sonnet", null);
 		assert.notEqual(synced.sessionId, session.sessionId);
-		assert.equal(synced.writable, false);
-		assert.strictEqual(__test.getSharedSession(null), state);
+		assert.strictEqual(__test.getSharedSession("pi"), state);
 	});
 	it("missing files import into a new session instead of attempting resume", () => {
 		const priors = [user("hi"), say("hello")];
@@ -109,12 +117,38 @@ describe("digest session decisions", () => {
 		assert.notEqual(__test.getSharedSession("pi").cwd, join(cwd, "other"), "the import is query-local until progress");
 		assert.ok(existsSync(session.jsonlPath));
 	});
+	for (const [name, model, reply] of [["a prefix-write", "sonnet", say("edited")], ["a full import", "opus", say("b")]]) {
+		it(`${name} sends the block Claude Code recorded for unchanged tool results, and pi's form for changed ones`, () => {
+			const failed = { ...result("t3"), isError: true };
+			const priors = [user("a"), say("b"), user("c"), calls("t1", "t2", "t3"), result("t1"), result("t2"), failed, say("done")];
+			const { session } = seed(priors);
+			// CC's forms, in CC's key order: output it saved to a file, and an error.
+			const notice = [{ type: "text", text: "Output has been saved to tool-results/t.txt" }];
+			const cc = {
+				t1: { tool_use_id: "t1", type: "tool_result", content: notice },
+				t2: { tool_use_id: "t2", type: "tool_result", content: notice },
+				t3: { type: "tool_result", content: [{ type: "text", text: "result-t3" }], is_error: true, tool_use_id: "t3" },
+			};
+			const records = readFileSync(session.jsonlPath, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+			for (const record of records) if (Array.isArray(record.message?.content)) {
+				record.message.content = record.message.content.map((b) => b.type === "tool_result" ? cc[b.tool_use_id] : b);
+			}
+			writeFileSync(session.jsonlPath, records.map((record) => JSON.stringify(record) + "\n").join(""));
+			const redacted = { ...result("t2"), content: [{ type: "text", text: "redacted" }] };
+			const synced = sync([priors[0], reply, ...priors.slice(2, 5), redacted, ...priors.slice(6), user("next")], model);
+			const written = readFileSync(getSessionPath(synced.sessionId, cwd, process.env.CLAUDE_CONFIG_DIR), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+			const results = Object.fromEntries(written.flatMap((r) => Array.isArray(r.message?.content) ? r.message.content : []).filter((b) => b.type === "tool_result").map((b) => [b.tool_use_id, b]));
+			assert.equal(JSON.stringify(results.t1), JSON.stringify(cc.t1));
+			assert.equal(JSON.stringify(results.t3), JSON.stringify(cc.t3));
+			assert.equal(JSON.stringify(results.t2), JSON.stringify({ type: "tool_result", tool_use_id: "t2", content: "redacted" }));
+		});
+	}
 	it("carries attachments to the new transcript without reporting a count mismatch", () => {
 		const priors = [user("Review @fixture.txt"), say("noted")];
 		const original = createSession({ projectPath: cwd });
 		const recorded = importHistory(original, priors, undefined, [{ userOrdinal: 0, parentText: "Review @fixture.txt", attachment: { type: "file", filename: join(cwd, "fixture.txt"), content: { type: "text", file: { filePath: join(cwd, "fixture.txt"), content: "token" } } } }]);
 		original.save();
-		__test.setSharedSession("pi", { ...recorded, ccSessionId: original.sessionId, cwd, model: "sonnet", dirtyTail: true });
+		__test.setSharedSession("pi", { ...recorded, ccSessionId: original.sessionId, cwd, model: "sonnet", promptDigest: "", dirtyTail: true });
 		const notices = [];
 		__test.setPiUI({ notify: (message) => notices.push(message) });
 		const synced = sync([...priors, say("changed tail"), user("next")]);
@@ -227,5 +261,47 @@ describe("actual import recording", () => {
 	it("rejects absent/misaligned arrays and invalid nullable boundaries", () => {
 		for (const state of [{}, { digests: [], uuids: [] }, { digests: ["d"], uuids: [], cuttable: [] }, { digests: ["d"], uuids: [null], cuttable: [true] }, { digests: ["d"], uuids: [""], cuttable: [false] }]) assert.throws(() => compareHistory([], state));
 		assert.deepEqual(copyRecording(), { digests: [], uuids: [], cuttable: [] });
+	});
+});
+
+describe("messages pi never keeps (#246)", () => {
+	// Each request ends with the trailing user messages it sends; the next request's history says whether pi kept them.
+	function notices(requests) {
+		const seen = [];
+		__test.setPiUI({ notify: (message) => seen.push(message) });
+		for (const messages of requests) __test.noticeDroppedTurn("pi", messages);
+		return seen;
+	}
+	it("warns once when a message appended to every request never stays in history", () => {
+		const todo = user("Current todo: #1 read files (0/3 done).");
+		const history = [user("go")];
+		const requests = [];
+		for (const id of ["a", "b", "c", "d", "e"]) {
+			requests.push([...history, todo]);
+			history.push(calls(id), result(id));
+		}
+		const seen = notices(requests);
+		assert.equal(seen.length, 1);
+		assert.match(seen[0], /"Current todo: #1 read files \(0\/3 done\)\."/);
+	});
+	it("retries neither reset the dropped-message streak nor repeat its warning", () => {
+		const seen = [];
+		__test.setPiUI({ notify: (message) => seen.push(message) });
+		const history = [user("go")];
+		for (const [i, id] of ["a", "b", "c", "d", "e"].entries()) {
+			const request = [...history, user("Current todo: read files")];
+			for (const attempt of ["initial", "retry"]) {
+				__test.noticeDroppedTurn("pi", request);
+				assert.equal(seen.length, i < 3 ? 0 : 1, `request ${id}, ${attempt}`);
+			}
+			history.push(calls(id), result(id));
+		}
+	});
+	it("stays quiet when pi keeps prompts and steers, and on retries", () => {
+		const turn1 = [user("go")];
+		const turn2 = [...turn1, calls("a"), result("a"), user("steer")];
+		const turn3 = [...turn2, calls("b"), result("b")];
+		const turn4 = [...turn3, say("done"), user("next")];
+		assert.deepEqual(notices([turn1, turn2, turn2, turn3, turn4, turn4]), []);
 	});
 });

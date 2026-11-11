@@ -12,7 +12,22 @@ import type { PromptStream } from "./prompt-stream.js";
 import { LiveRecording } from "./session-sync.js";
 import type { RateLimitInfo } from "./rate-limit.js";
 
-export interface PendingToolCall {
+export function newAssistantOutput(model: Model<any>, text: string, stopReason: AssistantMessage["stopReason"], errorMessage?: string): AssistantMessage {
+	return {
+		role: "assistant",
+		content: text ? [{ type: "text", text }] : [],
+		api: model.api,
+		provider: model.provider,
+		model: model.id,
+		usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+		stopReason,
+		...(errorMessage ? { errorMessage } : {}),
+		timestamp: Date.now(),
+	};
+}
+
+interface PendingToolCall {
 	toolName: string;
 	resolve: (result: McpResult) => void;
 }
@@ -42,18 +57,31 @@ export class QueryContext {
 	/** Synchronous progress capture before killing/discarding this query. */
 	commitRecording: ((dirty: boolean) => void) | null = null;
 	stopProcess: (() => void) | null = null;
+	/** Abandoned after a history rewrite or fatal tool rejection. Its completion
+	 *  must not touch the session state or pi stream. A rewrite's replacement query
+	 *  has rebuilt both from the new history; a rejection has already committed its
+	 *  final recording. A context runs at most one SDK query (every fresh query gets
+	 *  a new one), so this marks that query abandoned too. */
 	discarded = false;
 	sawResult = false;
 	pendingToolCalls = new Map<string, PendingToolCall>();
 	pendingResults = new Map<string, McpResult>();
-	/** tool_use ids emitted this turn. Sole purpose is routing a delivered result
-	 *  to the owning query when several queries are in flight — pairing a result
-	 *  to its call is done by id from Claude's tools/call _meta, not from here. */
+	/** tool_use ids emitted this turn. Routes a delivered result to the owning
+	 *  query when several queries are in flight, and tells which of CC's tool_results
+	 *  answer calls pi got — pairing a result to its call is done by id from
+	 *  Claude's tools/call _meta, not from here. */
 	turnToolCallIds: string[] = [];
+	/** tool_use ids Claude Code called our MCP handler for. A result for a call pi
+	 *  got that is not in here is one Claude Code rejected itself. */
+	dispatchedToolCalls = new Set<string>();
 	/** Streaming-input handle for the active query — how steers reach CC mid-turn. */
 	promptStream: PromptStream | null = null;
-	/** Steers written or awaiting a write, not yet replayed as incorporated into a turn. */
+	/** Steers written or awaiting a write, not yet incorporated into a turn. */
 	pendingSteerUuids = new Set<string>();
+	/** The input that opens CC's next turn: the query's prompt, then after each
+	 *  result the oldest steer still pending, since CC runs queued input in order.
+	 *  Cleared by that turn's first output. */
+	turnOpener: string | undefined;
 	/** Binds a later run's abort signal to this query. Set by the run that opened it;
 	 *  a run that continues it from a tool result (e.g. after pi terminated a tool
 	 *  batch and ended the opening run) has no other way to stop it. */
@@ -64,6 +92,8 @@ export class QueryContext {
 	/** Highest 5% utilization bucket we notified for, so repeat rate_limit_event spam is suppressed. */
 	lastRateLimitWarnStep: number | null = null;
 	lastRateLimitWarnThreshold: number | undefined;
+	/** Already warned that this query billed Extra Usage with the plan limit not reached. */
+	warnedUnplannedOverage = false;
 	/** pi session this query serves, from SimpleStreamOptions.sessionId at fresh-query
 	 *  setup. A bridge process serves several pi sessions at once (subagents run their
 	 *  own AgentSessions), and history rewrites must only discard the rewriting
@@ -116,13 +146,7 @@ export class QueryContext {
 	}
 
 	resetTurnState(model: Model<any>): void {
-		this.turnOutput = {
-			role: "assistant", content: [],
-			api: model.api, provider: model.provider, model: model.id,
-			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-			stopReason: "stop", timestamp: Date.now(),
-		};
+		this.turnOutput = newAssistantOutput(model, "", "stop");
 		this.lastAssistantMessageId = undefined;
 		this.turnAssistantIds = [];
 		this.turnStarted = false;
