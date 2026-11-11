@@ -1,0 +1,28 @@
+# Fork only. Upstream's ci.yml runs on pull_request, which never fires for this
+# fork's PRs, so a PR showed no checks. A push run attaches to the commit and
+# shows on the PR.
+name: Fork CI
+
+on:
+  push:
+    branches-ignore: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit-tests:
+    name: Fork unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run test:unit
