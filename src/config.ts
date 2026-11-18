@@ -84,5 +84,8 @@ export function loadConfig(cwd: string): Config {
 	// Normalize unset to "claude_code" and false/null to absent so each state hashes one way.
 	if (preset === undefined || preset === "claude_code") provider.systemPromptPreset = "claude_code";
 	else delete provider.systemPromptPreset;
-	return { askClaude: global.askClaude, provider };
+	return {
+		askClaude: global.askClaude,
+		provider,
+	};
 }
