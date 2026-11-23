@@ -146,4 +146,17 @@ describe("fresh query after a compaction", () => {
 		}
 		assert.ok(launches.length > 1);
 	});
+
+	it("tells updates apart that share a timestamp", async () => {
+		const added = { role: "system", content: "", toolsAdded: [tools[1]], timestamp: 5 };
+		const removed = { role: "system", content: "", toolsRemoved: [{ name: "bash" }], timestamp: 5 };
+		// both updates already seen, the compaction keeps only the removal: it stays applied
+		await run({ messages: [head([tools[0]]), added, removed, user("one")] }, "pi-same-ms");
+		await run({ messages: [user("[summary]"), removed, call("toolu_1"), toolResult("toolu_1")] }, "pi-same-ms");
+		assert.deepEqual(await servedTools(launches[1]), ["read"]);
+		// the removal first arrives after the compaction, in the same millisecond as the addition
+		await run({ messages: [head([tools[0]]), added, user("one")] }, "pi-same-ms-new");
+		await run({ messages: [user("[summary]"), added, removed, call("toolu_2"), toolResult("toolu_2")] }, "pi-same-ms-new");
+		assert.deepEqual(await servedTools(launches[3]), ["read"]);
+	});
 });
