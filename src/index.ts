@@ -20,7 +20,7 @@ import { compareHistory, copyRecording, importHistory, LiveRecording, type Recor
 import { deleteSessionState, loadSessionState, saveSessionState } from "./session-store.js";
 import { newAssistantOutput, QueryContext, type AssistantStep } from "./query-state.js";
 import { makePromptStream, userMessage, type PromptStream } from "./prompt-stream.js";
-import { registerAccount, continuationChildEnv, continuationPromptEnv, continuationSyncRow, observeContinuationOutput, prepareContinuationPrompt, pushContinuationPrompt, setActiveToolsProbe, warnIfToolless, withRememberedDeclarations } from "./fork/index.js";
+import { registerAccount, continuationChildEnv, continuationPromptEnv, continuationSyncRow, observeContinuationOutput, prepareContinuationPrompt, pushContinuationPrompt, setActiveToolsProbe, setSnapshotSource, warnIfToolless, withRememberedDeclarations } from "./fork/index.js";
 import { claudeCodeSettings, globalConfigPath, loadConfig, type Config } from "./config.js";
 import { collectCarriedAttachments } from "./attachments.js";
 import { createToolServer } from "./mcp-server.js";
@@ -2240,6 +2240,7 @@ export default function (pi: ExtensionAPI) {
 	};
 	pi.on("session_start", (event, ctx) => {
 		piUI = ctx.ui;
+		setSnapshotSource(pi, ctx);
 		rememberSessionCwd(ctx.sessionManager.getSessionId(), ctx.cwd);
 		if (event.reason === "new" || event.reason === "resume" || event.reason === "fork") {
 			clearSession(`session_start:${event.reason}`);
@@ -2265,6 +2266,7 @@ export default function (pi: ExtensionAPI) {
 	// nothing to record here. agent_start still clears a stale tool rejection: a
 	// terminating tool can end the previous run without consuming its rejection (#218).
 	pi.on("agent_start", (_event, ctx) => {
+		setSnapshotSource(pi, ctx);
 		rejectedToolCalls.delete(ctx.sessionManager.getSessionId());
 	});
 	pi.on("session_shutdown", (_event, ctx) => {

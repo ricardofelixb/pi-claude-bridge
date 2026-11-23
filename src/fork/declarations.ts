@@ -4,7 +4,7 @@
 // no MCP server and no pi prompt: the model cannot call anything and ends the
 // turn with no output. Reuse what the same pi session declared on its last
 // call, under the updates that survived the compaction.
-import { getCurrentSystemMessage, type Context, type Message, type SystemMessage } from "@earendil-works/pi-ai";
+import { getCurrentSystemMessage, type Context, type Message, type SystemMessage, type Tool } from "@earendil-works/pi-ai";
 import { debug } from "../debug.js";
 import { toBridgeContext } from "../transcript.js";
 
@@ -18,6 +18,34 @@ interface Declared {
 }
 const lastDeclared = new Map<string, Declared>();
 let activeToolNames: (() => string[]) | undefined;
+
+// Where to ask pi for its current declaration when this module has seen none for
+// the session: the bridge was switched to or reloaded after the compaction.
+type Snapshot = { systemPrompt: string | undefined; tools: Tool[] };
+const snapshotSources = new Map<string, () => Snapshot | undefined>();
+
+interface SnapshotPi {
+	getActiveTools?(): string[];
+	getAllTools?(): { name: string; description: string; parameters: unknown }[];
+}
+interface SnapshotCtx {
+	sessionManager: { getSessionId(): string };
+	getSystemPrompt?(): string;
+}
+
+/** Remember how to read pi's active tools and prompt for this session (hosts may lack any of these calls). */
+export function setSnapshotSource(pi: SnapshotPi, ctx: SnapshotCtx): void {
+	snapshotSources.set(ctx.sessionManager.getSessionId(), () => {
+		try {
+			const active = new Set(pi.getActiveTools?.() ?? []);
+			const tools = (pi.getAllTools?.() ?? []).filter((tool) => active.has(tool.name)) as unknown as Tool[];
+			return { systemPrompt: ctx.getSystemPrompt?.(), tools };
+		} catch (err) {
+			debug(`provider: could not read pi's declaration: ${err instanceof Error ? err.message : String(err)}`);
+			return undefined; // a context from a replaced session throws
+		}
+	});
+}
 
 /** pi's own view of the declared tools, for the warning below. */
 export function setActiveToolsProbe(probe: (() => string[]) | undefined): void {
@@ -55,7 +83,7 @@ export function withRememberedDeclarations(context: Context, source: Context, se
 		});
 		return context;
 	}
-	const remembered = lastDeclared.get(sessionId);
+	const remembered = lastDeclared.get(sessionId) ?? fromPi(sessionId, updates);
 	if (!remembered) return context;
 	const fresh = updates.filter((message) => !remembered.applied.has(keyOf(message)));
 	const head = getCurrentSystemMessage([remembered.head, ...fresh]) ?? remembered.head;
@@ -63,6 +91,20 @@ export function withRememberedDeclarations(context: Context, source: Context, se
 	const restored = toBridgeContext({ ...source, messages: [head, ...messages.filter((message) => message.role !== "system")] });
 	debug(`provider: call carried no declaration; restored ${restored.tools?.length ?? 0} tools and the prompt from the session's last call, ${fresh.length} of ${updates.length} retained updates new`);
 	return restored;
+}
+
+/** pi's current state already includes the retained updates, so they count as applied. */
+function fromPi(sessionId: string, updates: SystemMessage[]): Declared | undefined {
+	const snapshot = snapshotSources.get(sessionId)?.();
+	if (!snapshot || (!snapshot.systemPrompt && snapshot.tools.length === 0)) return undefined;
+	debug(`provider: no earlier declaration for the session; read ${snapshot.tools.length} tools from pi`);
+	const head: SystemMessage = {
+		role: "system",
+		content: snapshot.systemPrompt ?? "",
+		...(snapshot.tools.length > 0 ? { toolsAdded: snapshot.tools } : {}),
+		timestamp: 0,
+	};
+	return { head, applied: new Set(updates.map(keyOf)) };
 }
 
 function emptyDeclaration(): SystemMessage {

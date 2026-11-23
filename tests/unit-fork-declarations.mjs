@@ -12,18 +12,26 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 
+const schema = { type: "object", properties: { path: { type: "string" } }, required: ["path"] };
 const mod = await import("../src/index.js");
 const { setQuery, resetSharedSession, activeQueryContexts, markRebuildForSession } = mod.__test;
 let providerConfig;
+const handlers = {};
+const piTools = () => [
+	{ name: "read", description: "Read a file", parameters: schema },
+	{ name: "bash", description: "Run a command", parameters: schema },
+	{ name: "grep", description: "Search", parameters: schema },
+];
 mod.default({
-	on: () => {},
+	on: (name, fn) => { (handlers[name] ??= []).push(fn); },
+	getActiveTools: () => ["read", "bash"],
+	getAllTools: piTools,
 	registerProvider: (_name, config) => { providerConfig = config; },
 	registerCommand: () => {},
 });
 const { streamSimple } = providerConfig;
 const model = providerConfig.models[0];
 
-const schema = { type: "object", properties: { path: { type: "string" } }, required: ["path"] };
 const tools = [
 	{ name: "read", description: "Read a file", parameters: schema },
 	{ name: "bash", description: "Run a command", parameters: schema },
@@ -158,5 +166,19 @@ describe("fresh query after a compaction", () => {
 		await run({ messages: [head([tools[0]]), added, user("one")] }, "pi-same-ms-new");
 		await run({ messages: [user("[summary]"), added, removed, call("toolu_2"), toolResult("toolu_2")] }, "pi-same-ms-new");
 		assert.deepEqual(await servedTools(launches[3]), ["read"]);
+	});
+
+	it("reads pi's own tools and prompt when the bridge has seen none for the session", async () => {
+		// pi switched to this provider (or the bridge reloaded) after a compaction
+		const ctx = { sessionManager: { getSessionId: () => "pi-cold" }, getSystemPrompt: () => PROMPT };
+		for (const fn of handlers.agent_start) fn({}, ctx);
+		const retained = { role: "system", content: "", toolsRemoved: [{ name: "read" }], timestamp: 5 };
+		await run({ messages: [user("[summary]"), call("toolu_1"), toolResult("toolu_1")] }, "pi-cold");
+		assert.deepEqual(await servedTools(launches[0]), ["read", "bash"], "only the tools pi has active");
+		assert.equal(launches[0].systemPrompt.append, PROMPT);
+
+		for (const fn of handlers.agent_start) fn({}, { ...ctx, sessionManager: { getSessionId: () => "pi-cold2" } });
+		await run({ messages: [user("[summary]"), retained, call("toolu_2"), toolResult("toolu_2")] }, "pi-cold2");
+		assert.deepEqual(await servedTools(launches[1]), ["read", "bash"], "pi's state already includes a retained update");
 	});
 });
