@@ -195,4 +195,14 @@ describe("fresh query after a compaction", () => {
 		await run({ messages: [user("[summary]"), call("toolu_1"), toolResult("toolu_1")] }, "pi-switched");
 		assert.deepEqual(await servedTools(launches[1]), ["read"]);
 	});
+
+	it("keeps the prompt the session declared when pi's own prompt lacks an extension's change", async () => {
+		const ctx = { sessionManager: { getSessionId: () => "pi-ext-prompt" }, getSystemPrompt: () => "BASE" };
+		for (const fn of handlers.agent_start) fn({}, ctx);
+		// an extension added RULE to the request's system message; pi's getter does not see it
+		await run({ messages: [{ ...head(), content: "BASE\n\nRULE" }, user("one")] }, "pi-ext-prompt");
+		await run({ messages: [user("[summary]"), call("toolu_1"), toolResult("toolu_1")] }, "pi-ext-prompt");
+		assert.equal(launches[1].systemPrompt.append, "BASE\n\nRULE");
+		assert.deepEqual(await servedTools(launches[1]), ["read", "bash"]);
+	});
 });

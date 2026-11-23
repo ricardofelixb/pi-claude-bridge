@@ -84,30 +84,37 @@ export function withRememberedDeclarations(context: Context, source: Context, se
 		});
 		return context;
 	}
-	// pi's own state outranks what this module saw last: the session may have run on
-	// another model since, with tools changed by updates the compaction dropped.
-	const remembered = fromPi(sessionId, updates) ?? lastDeclared.get(sessionId);
+	// Tools: pi's own state outranks what this module saw last, since the session may
+	// have run on another model since, with tools changed by updates the compaction
+	// dropped. Prompt: what the session declared, kept as is, because pi's own prompt
+	// getter leaves out what extensions changed in the request. pi's is the fallback
+	// for a session this module never saw.
+	const piNow = snapshotSources.get(sessionId)?.();
+	const remembered = lastDeclared.get(sessionId) ?? (piNow && fromPi(piNow, updates));
 	if (!remembered) return context;
 	const fresh = updates.filter((message) => !remembered.applied.has(keyOf(message)));
-	const head = getCurrentSystemMessage([remembered.head, ...fresh]) ?? remembered.head;
+	let head = getCurrentSystemMessage([remembered.head, ...fresh]) ?? remembered.head;
+	if (piNow) {
+		const { toolsAdded: _replayed, ...prompt } = head;
+		head = { ...prompt, ...(piNow.tools.length > 0 ? { toolsAdded: piNow.tools } : {}) };
+	}
 	lastDeclared.set(sessionId, { head, applied: new Set([...remembered.applied, ...fresh.map(keyOf)]) });
 	const restored = toBridgeContext({ ...source, messages: [head, ...messages.filter((message) => message.role !== "system")] });
-	debug(`provider: call carried no declaration; restored ${restored.tools?.length ?? 0} tools and the prompt from the session's last call, ${fresh.length} of ${updates.length} retained updates new`);
+	debug(`provider: call carried no declaration; restored ${restored.tools?.length ?? 0} tools (${piNow ? "from pi" : "remembered"}) and the prompt from the session's last call, ${fresh.length} of ${updates.length} retained updates new`);
 	return restored;
 }
 
 /** pi's current state already includes the retained updates, so they count as applied. */
-function fromPi(sessionId: string, updates: SystemMessage[]): Declared | undefined {
-	const snapshot = snapshotSources.get(sessionId)?.();
-	if (!snapshot) return undefined;
-	debug(`provider: call carried no declaration; read ${snapshot.tools.length} tools from pi`);
-	const head: SystemMessage = {
-		role: "system",
-		content: snapshot.systemPrompt ?? "",
-		...(snapshot.tools.length > 0 ? { toolsAdded: snapshot.tools } : {}),
-		timestamp: 0,
+function fromPi(snapshot: Snapshot, updates: SystemMessage[]): Declared {
+	return {
+		head: {
+			role: "system",
+			content: snapshot.systemPrompt ?? "",
+			...(snapshot.tools.length > 0 ? { toolsAdded: snapshot.tools } : {}),
+			timestamp: 0,
+		},
+		applied: new Set(updates.map(keyOf)),
 	};
-	return { head, applied: new Set(updates.map(keyOf)) };
 }
 
 function emptyDeclaration(): SystemMessage {
