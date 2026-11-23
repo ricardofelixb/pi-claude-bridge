@@ -214,4 +214,16 @@ describe("fresh query after a compaction", () => {
 		await run({ messages: [user("[summary]"), call("toolu_1"), toolResult("toolu_1")] }, "pi-elsewhere");
 		assert.equal(launches[1].systemPrompt.append, "BASE\n\nNEW RULE");
 	});
+
+	it("keeps a prompt update another model's call carried, after a second compaction drops it", async () => {
+		const ctx = { sessionManager: { getSessionId: () => "pi-elsewhere2" }, getSystemPrompt: () => "BASE" };
+		await run({ messages: [{ ...head(), content: "BASE", sections: { rules: "OLD RULE" } }, user("one")] }, "pi-elsewhere2");
+		// after a compaction the other model's call carries the update without the leading declaration
+		const update = { role: "system", content: "", sections: { rules: "NEW RULE" }, timestamp: 5 };
+		for (const fn of handlers.context_with_system) fn({ messages: [user("[summary]"), update, user("two")] }, ctx);
+		// a second compaction drops the update before the session returns
+		await run({ messages: [user("[summary 2]"), call("toolu_1"), toolResult("toolu_1")] }, "pi-elsewhere2");
+		assert.match(launches[1].systemPrompt.append, /NEW RULE/);
+		assert.doesNotMatch(launches[1].systemPrompt.append, /OLD RULE/);
+	});
 });

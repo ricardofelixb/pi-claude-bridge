@@ -59,10 +59,23 @@ const keyOf = (message: SystemMessage): string => JSON.stringify(message);
 /**
  * Record the declaration in a transcript pi is about to send, to any model: the
  * session may run elsewhere for a while, and what it declared there is what the
- * bridge must restore on return. True when the transcript carried one.
+ * bridge must restore on return. True when the transcript carried a declaration;
+ * updates that survived a compaction are folded into the remembered one.
  */
 export function observeDeclaration(sessionId: string, messages: readonly Message[]): boolean {
-	if (messages[0]?.role !== "system") return false;
+	if (messages[0]?.role !== "system") {
+		// Updates that survived a compaction are new state too: fold them in now, since
+		// the next compaction may drop them before the bridge is called again.
+		const remembered = lastDeclared.get(sessionId);
+		const fresh = remembered ? systemMessages(messages).filter((message) => !remembered.applied.has(keyOf(message))) : [];
+		if (remembered && fresh.length > 0) {
+			lastDeclared.set(sessionId, {
+				head: getCurrentSystemMessage([remembered.head, ...fresh]) ?? remembered.head,
+				applied: new Set([...remembered.applied, ...fresh.map(keyOf)]),
+			});
+		}
+		return false;
+	}
 	lastDeclared.set(sessionId, {
 		head: getCurrentSystemMessage(messages as Message[]) ?? emptyDeclaration(),
 		applied: new Set(systemMessages(messages).map(keyOf)),
