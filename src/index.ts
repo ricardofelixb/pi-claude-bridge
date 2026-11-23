@@ -20,7 +20,7 @@ import { compareHistory, copyRecording, importHistory, LiveRecording, type Recor
 import { deleteSessionState, loadSessionState, saveSessionState } from "./session-store.js";
 import { newAssistantOutput, QueryContext, type AssistantStep } from "./query-state.js";
 import { makePromptStream, userMessage, type PromptStream } from "./prompt-stream.js";
-import { registerAccount, continuationChildEnv, continuationPromptEnv, continuationSyncRow, observeContinuationOutput, prepareContinuationPrompt, pushContinuationPrompt, setActiveToolsProbe, setSnapshotSource, warnIfToolless, withRememberedDeclarations } from "./fork/index.js";
+import { registerAccount, continuationChildEnv, continuationPromptEnv, continuationSyncRow, observeContinuationOutput, prepareContinuationPrompt, pushContinuationPrompt, observeDeclaration, setActiveToolsProbe, setSnapshotSource, warnIfToolless, withRememberedDeclarations } from "./fork/index.js";
 import { claudeCodeSettings, globalConfigPath, loadConfig, type Config } from "./config.js";
 import { collectCarriedAttachments } from "./attachments.js";
 import { createToolServer } from "./mcp-server.js";
@@ -2265,6 +2265,11 @@ export default function (pi: ExtensionAPI) {
 	// The provider forwards pi's system message whole (toBridgeContext), so there is
 	// nothing to record here. agent_start still clears a stale tool rejection: a
 	// terminating tool can end the previous run without consuming its rejection (#218).
+	// Sees every model's final transcript, so the declaration is current when the
+	// session returns to this provider. Returns nothing: the transcript is untouched.
+	pi.on("context_with_system", (event, ctx) => {
+		observeDeclaration(ctx.sessionManager.getSessionId(), event.messages as Context["messages"]);
+	});
 	pi.on("agent_start", (_event, ctx) => {
 		setSnapshotSource(pi, ctx);
 		rejectedToolCalls.delete(ctx.sessionManager.getSessionId());

@@ -57,6 +57,20 @@ const systemMessages = (messages: readonly Message[]): SystemMessage[] => messag
 const keyOf = (message: SystemMessage): string => JSON.stringify(message);
 
 /**
+ * Record the declaration in a transcript pi is about to send, to any model: the
+ * session may run elsewhere for a while, and what it declared there is what the
+ * bridge must restore on return. True when the transcript carried one.
+ */
+export function observeDeclaration(sessionId: string, messages: readonly Message[]): boolean {
+	if (messages[0]?.role !== "system") return false;
+	lastDeclared.set(sessionId, {
+		head: getCurrentSystemMessage(messages as Message[]) ?? emptyDeclaration(),
+		applied: new Set(systemMessages(messages).map(keyOf)),
+	});
+	return true;
+}
+
+/**
  * `context` is in bridge shape (toBridgeContext); `source` is what pi passed.
  * pi's declaration is the system message at index 0; a system message anywhere
  * else is an update that survived the compaction. One the remembered state has
@@ -67,13 +81,7 @@ const keyOf = (message: SystemMessage): string => JSON.stringify(message);
 export function withRememberedDeclarations(context: Context, source: Context, sessionId: string | undefined): Context {
 	if (!sessionId) return context;
 	const messages = source.messages;
-	if (messages[0]?.role === "system") {
-		lastDeclared.set(sessionId, {
-			head: getCurrentSystemMessage(messages) ?? emptyDeclaration(),
-			applied: new Set(systemMessages(messages).map(keyOf)),
-		});
-		return context;
-	}
+	if (observeDeclaration(sessionId, messages)) return context;
 	const updates = systemMessages(messages);
 	if (updates.length === 0 && (context.systemPrompt !== undefined || context.tools !== undefined)) {
 		// Legacy shape: the fields themselves are the declaration, even when empty.
@@ -87,8 +95,9 @@ export function withRememberedDeclarations(context: Context, source: Context, se
 	// Tools: pi's own state outranks what this module saw last, since the session may
 	// have run on another model since, with tools changed by updates the compaction
 	// dropped. Prompt: what the session declared, kept as is, because pi's own prompt
-	// getter leaves out what extensions changed in the request. pi's is the fallback
-	// for a session this module never saw.
+	// getter leaves out what extensions changed in the request. Every model's calls
+	// are recorded (observeDeclaration), so this is what the session last sent
+	// anywhere; pi's prompt is the fallback for a session this module never saw.
 	const piNow = snapshotSources.get(sessionId)?.();
 	const remembered = lastDeclared.get(sessionId) ?? (piNow && fromPi(piNow, updates));
 	if (!remembered) return context;

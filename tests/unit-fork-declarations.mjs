@@ -205,4 +205,13 @@ describe("fresh query after a compaction", () => {
 		assert.equal(launches[1].systemPrompt.append, "BASE\n\nRULE");
 		assert.deepEqual(await servedTools(launches[1]), ["read", "bash"]);
 	});
+
+	it("restores the prompt a session last sent to another model", async () => {
+		const ctx = { sessionManager: { getSessionId: () => "pi-elsewhere" }, getSystemPrompt: () => "BASE" };
+		await run({ messages: [{ ...head(), content: "BASE\n\nOLD RULE" }, user("one")] }, "pi-elsewhere");
+		// a turn on another model, with the rule changed; the compaction then drops that update
+		for (const fn of handlers.context_with_system) fn({ messages: [{ ...head(), content: "BASE\n\nNEW RULE" }, user("two")] }, ctx);
+		await run({ messages: [user("[summary]"), call("toolu_1"), toolResult("toolu_1")] }, "pi-elsewhere");
+		assert.equal(launches[1].systemPrompt.append, "BASE\n\nNEW RULE");
+	});
 });
