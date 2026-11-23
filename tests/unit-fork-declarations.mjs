@@ -96,4 +96,33 @@ describe("fresh query after a compaction", () => {
 		await run({ messages: [user("[summary]"), call("toolu_1"), toolResult("toolu_1")] }, "pi-stranger");
 		assert.deepEqual(await servedTools(launches[1]), [], "a session that never declared tools stays without");
 	});
+
+	it("applies a tool removal that survived the compaction to the remembered tools", async () => {
+		await run({ messages: [head(), user("one")] }, "pi-removed");
+		const removal = { role: "system", content: "", toolsRemoved: [{ name: "bash" }], timestamp: 5 };
+		await run({ messages: [user("[summary]"), removal, call("toolu_1"), toolResult("toolu_1")] }, "pi-removed");
+		assert.deepEqual(await servedTools(launches[1]), ["read"], "bash stays removed, read stays");
+	});
+
+	it("applies a prompt section update that survived the compaction", async () => {
+		await run({ messages: [{ ...head(), sections: { rules: "<rules>old</rules>" } }, user("one")] }, "pi-section");
+		const update = { role: "system", content: "", sections: { rules: "<rules>new</rules>" }, timestamp: 5 };
+		await run({ messages: [user("[summary]"), update, call("toolu_1"), toolResult("toolu_1")] }, "pi-section");
+		const prompt = launches[1].systemPrompt.append;
+		assert.match(prompt, /<rules>new<\/rules>/);
+		assert.doesNotMatch(prompt, /<rules>old/);
+		assert.deepEqual(await servedTools(launches[1]), ["read", "bash"]);
+	});
+
+	it("does not restore tools after the session declared none", async () => {
+		await run({ messages: [head(), user("one")] }, "pi-emptied");
+		await run({ messages: [{ role: "system", content: "", timestamp: 0 }, user("one"), call("toolu_1"), toolResult("toolu_1")] }, "pi-emptied");
+		await run({ messages: [user("[summary]"), call("toolu_2"), toolResult("toolu_2")] }, "pi-emptied");
+		assert.deepEqual(await servedTools(launches[2]), [], "an empty system declaration is a declaration");
+
+		await run({ messages: [head(), user("one")] }, "pi-legacy");
+		await run({ messages: [user("two")], tools: [] }, "pi-legacy");
+		await run({ messages: [user("[summary]"), call("toolu_3"), toolResult("toolu_3")] }, "pi-legacy");
+		assert.deepEqual(await servedTools(launches[5]), [], "so is an explicit empty tool list");
+	});
 });
