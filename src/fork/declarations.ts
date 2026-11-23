@@ -8,9 +8,14 @@ import { getCurrentSystemMessage, type Context, type SystemMessage } from "@eare
 import { debug } from "../debug.js";
 import { toBridgeContext } from "../transcript.js";
 
-// What each pi session last declared, replayed into one leading system message.
-// An empty declaration is kept too: it must not fall back to an older one.
-const lastDeclared = new Map<string, SystemMessage>();
+// What each pi session last declared, replayed into one leading system message,
+// and the timestamp of the newest system message already folded into it. An
+// empty declaration is kept too: it must not fall back to an older one.
+interface Declared {
+	head: SystemMessage;
+	appliedThrough: number;
+}
+const lastDeclared = new Map<string, Declared>();
 let activeToolNames: (() => string[]) | undefined;
 
 /** pi's own view of the declared tools, for the warning below. */
@@ -18,35 +23,44 @@ export function setActiveToolsProbe(probe: (() => string[]) | undefined): void {
 	activeToolNames = probe;
 }
 
+const newestSystemTimestamp = (messages: readonly { role: string; timestamp?: number }[]): number =>
+	Math.max(-Infinity, ...messages.filter((message) => message.role === "system").map((message) => message.timestamp ?? 0));
+
 /**
  * `context` is in bridge shape (toBridgeContext); `source` is what pi passed.
  * pi's declaration is the system message at index 0; a system message anywhere
- * else is an update that survived the compaction, to replay on the remembered one.
+ * else is an update that survived the compaction. An update newer than what the
+ * remembered state has folded in is replayed on it, once; an older one is
+ * already reflected (or was undone by a later update the compaction dropped),
+ * so replaying it again would repeat its prompt text or bring back a removed tool.
  */
 export function withRememberedDeclarations(context: Context, source: Context, sessionId: string | undefined): Context {
 	if (!sessionId) return context;
 	const messages = source.messages;
 	if (messages[0]?.role === "system") {
-		lastDeclared.set(sessionId, getCurrentSystemMessage(messages) ?? emptyDeclaration());
+		lastDeclared.set(sessionId, {
+			head: getCurrentSystemMessage(messages) ?? emptyDeclaration(),
+			appliedThrough: newestSystemTimestamp(messages),
+		});
 		return context;
 	}
-	const hasUpdates = messages.some((message) => message.role === "system");
-	if (!hasUpdates && (context.systemPrompt !== undefined || context.tools !== undefined)) {
+	const updates = messages.filter((message) => message.role === "system");
+	if (updates.length === 0 && (context.systemPrompt !== undefined || context.tools !== undefined)) {
 		// Legacy shape: the fields themselves are the declaration, even when empty.
 		const tools = context.tools ?? [];
 		lastDeclared.set(sessionId, {
-			role: "system",
-			content: context.systemPrompt ?? "",
-			...(tools.length > 0 ? { toolsAdded: tools } : {}),
-			timestamp: 0,
+			head: { role: "system", content: context.systemPrompt ?? "", ...(tools.length > 0 ? { toolsAdded: tools } : {}), timestamp: 0 },
+			appliedThrough: -Infinity,
 		});
 		return context;
 	}
 	const remembered = lastDeclared.get(sessionId);
 	if (!remembered) return context;
-	const restored = toBridgeContext({ ...source, messages: [remembered, ...messages] });
-	lastDeclared.set(sessionId, getCurrentSystemMessage([remembered, ...messages]) ?? remembered);
-	debug(`provider: call carried no declaration; restored ${restored.tools?.length ?? 0} tools and the prompt from the session's last call${hasUpdates ? " plus its retained updates" : ""}`);
+	const fresh = updates.filter((message) => message.timestamp > remembered.appliedThrough);
+	const head = getCurrentSystemMessage([remembered.head, ...fresh]) ?? remembered.head;
+	lastDeclared.set(sessionId, { head, appliedThrough: Math.max(remembered.appliedThrough, newestSystemTimestamp(fresh)) });
+	const restored = toBridgeContext({ ...source, messages: [head, ...messages.filter((message) => message.role !== "system")] });
+	debug(`provider: call carried no declaration; restored ${restored.tools?.length ?? 0} tools and the prompt from the session's last call, ${fresh.length} of ${updates.length} retained updates new`);
 	return restored;
 }
 

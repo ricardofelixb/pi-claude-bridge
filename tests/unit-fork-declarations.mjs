@@ -125,4 +125,25 @@ describe("fresh query after a compaction", () => {
 		await run({ messages: [user("[summary]"), call("toolu_3"), toolResult("toolu_3")] }, "pi-legacy");
 		assert.deepEqual(await servedTools(launches[5]), [], "so is an explicit empty tool list");
 	});
+
+	it("does not bring back a tool whose removal the compaction dropped", async () => {
+		const added = { role: "system", content: "", toolsAdded: [tools[1]], timestamp: 5 };
+		const removed = { role: "system", content: "", toolsRemoved: [{ name: "bash" }], timestamp: 6 };
+		await run({ messages: [head([tools[0]]), added, user("one"), removed, user("two")] }, "pi-undone");
+		// the compaction kept the earlier addition and dropped the removal that undid it
+		await run({ messages: [user("[summary]"), added, call("toolu_1"), toolResult("toolu_1")] }, "pi-undone");
+		assert.deepEqual(await servedTools(launches[1]), ["read"]);
+	});
+
+	it("adds a retained update's prompt text once, however many calls carry it", async () => {
+		await run({ messages: [head(), user("one")] }, "pi-once");
+		const rule = { role: "system", content: "RULE", timestamp: 5 };
+		for (const id of ["toolu_1", "toolu_2", "toolu_3"]) {
+			await run({ messages: [user("[summary]"), rule, call(id), toolResult(id)] }, "pi-once");
+		}
+		for (const launch of launches.slice(1)) {
+			assert.equal(launch.systemPrompt.append, `${PROMPT}\n\nRULE`);
+		}
+		assert.ok(launches.length > 1);
+	});
 });
