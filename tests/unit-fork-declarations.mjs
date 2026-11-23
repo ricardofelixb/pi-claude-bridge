@@ -17,6 +17,7 @@ const mod = await import("../src/index.js");
 const { setQuery, resetSharedSession, activeQueryContexts, markRebuildForSession } = mod.__test;
 let providerConfig;
 const handlers = {};
+let activeNow = ["read", "bash"];
 const piTools = () => [
 	{ name: "read", description: "Read a file", parameters: schema },
 	{ name: "bash", description: "Run a command", parameters: schema },
@@ -24,7 +25,7 @@ const piTools = () => [
 ];
 mod.default({
 	on: (name, fn) => { (handlers[name] ??= []).push(fn); },
-	getActiveTools: () => ["read", "bash"],
+	getActiveTools: () => activeNow,
 	getAllTools: piTools,
 	registerProvider: (_name, config) => { providerConfig = config; },
 	registerCommand: () => {},
@@ -48,6 +49,7 @@ const toolResult = (id) => ({ role: "toolResult", toolCallId: id, toolName: "rea
 
 let launches;
 beforeEach(() => {
+	activeNow = ["read", "bash"];
 	resetSharedSession();
 	activeQueryContexts.clear();
 	launches = [];
@@ -180,5 +182,17 @@ describe("fresh query after a compaction", () => {
 		for (const fn of handlers.agent_start) fn({}, { ...ctx, sessionManager: { getSessionId: () => "pi-cold2" } });
 		await run({ messages: [user("[summary]"), retained, call("toolu_2"), toolResult("toolu_2")] }, "pi-cold2");
 		assert.deepEqual(await servedTools(launches[1]), ["read", "bash"], "pi's state already includes a retained update");
+	});
+
+	it("takes pi's current tools over the remembered ones when the session ran elsewhere in between", async () => {
+		const ctx = { sessionManager: { getSessionId: () => "pi-switched" }, getSystemPrompt: () => PROMPT };
+		for (const fn of handlers.agent_start) fn({}, ctx);
+		await run({ messages: [head(), user("one")] }, "pi-switched");
+		assert.deepEqual(await servedTools(launches[0]), ["read", "bash"]);
+		// another model's turns disabled bash, and the compaction dropped that update
+		activeNow = ["read"];
+		for (const fn of handlers.agent_start) fn({}, ctx);
+		await run({ messages: [user("[summary]"), call("toolu_1"), toolResult("toolu_1")] }, "pi-switched");
+		assert.deepEqual(await servedTools(launches[1]), ["read"]);
 	});
 });
