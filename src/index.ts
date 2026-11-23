@@ -20,7 +20,7 @@ import { compareHistory, copyRecording, importHistory, LiveRecording, type Recor
 import { deleteSessionState, loadSessionState, saveSessionState } from "./session-store.js";
 import { newAssistantOutput, QueryContext, type AssistantStep } from "./query-state.js";
 import { makePromptStream, userMessage, type PromptStream } from "./prompt-stream.js";
-import { registerAccount, continuationChildEnv, continuationPromptEnv, continuationSyncRow, observeContinuationOutput, prepareContinuationPrompt, pushContinuationPrompt } from "./fork/index.js";
+import { registerAccount, continuationChildEnv, continuationPromptEnv, continuationSyncRow, observeContinuationOutput, prepareContinuationPrompt, pushContinuationPrompt, observeDeclaration, setActiveToolsProbe, setSnapshotSource, warnIfToolless, withRememberedDeclarations } from "./fork/index.js";
 import { claudeCodeSettings, globalConfigPath, loadConfig, type Config } from "./config.js";
 import { collectCarriedAttachments } from "./attachments.js";
 import { createToolServer } from "./mcp-server.js";
@@ -1726,6 +1726,7 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 		return isolatedStreamFn(model, context, options, traceCallId);
 	}
 
+	context = withRememberedDeclarations(context, sourceContext, options?.sessionId);
 	if (options?.sessionId) noticeDroppedTurn(options.sessionId, context.messages);
 
 	const stream = createAssistantMessageEventStream();
@@ -1858,6 +1859,7 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 	// failure here leaves no half-built query behind -- in particular no stream claimed on
 	// the shared context that nobody will ever end.
 	const { mcpTools, customToolNameToSdk, customToolNameToPi } = resolveMcpTools(context);
+	warnIfToolless(mcpTools.length, sessionTag(options?.sessionId));
 	// pi's own prompt, whole: toBridgeContext joined pi's sections via pi-ai. No
 	// capture lookup -- the prompt is forwarded as-is, as the preset's append by
 	// default or as a plain string when provider.systemPromptPreset is off.
@@ -2204,6 +2206,7 @@ export default function (pi: ExtensionAPI) {
 	debug("loadConfig:", JSON.stringify(config));
 	providerSettings = config.provider ?? {};
 	registerAccount(pi, providerSettings);
+	setActiveToolsProbe(pi.getActiveTools ? () => pi.getActiveTools() : undefined);
 	// Opus 4.6 and Sonnet 4.6 need these settings to know if they're eligible for 1M context
 	// Validate at the boundary: a non-array here would throw inside every
 	// claudeCodeModelId call and brick the extension at activation.
@@ -2237,6 +2240,7 @@ export default function (pi: ExtensionAPI) {
 	};
 	pi.on("session_start", (event, ctx) => {
 		piUI = ctx.ui;
+		setSnapshotSource(pi, ctx);
 		rememberSessionCwd(ctx.sessionManager.getSessionId(), ctx.cwd);
 		if (event.reason === "new" || event.reason === "resume" || event.reason === "fork") {
 			clearSession(`session_start:${event.reason}`);
@@ -2261,7 +2265,13 @@ export default function (pi: ExtensionAPI) {
 	// The provider forwards pi's system message whole (toBridgeContext), so there is
 	// nothing to record here. agent_start still clears a stale tool rejection: a
 	// terminating tool can end the previous run without consuming its rejection (#218).
+	// Sees every model's final transcript, so the declaration is current when the
+	// session returns to this provider. Returns nothing: the transcript is untouched.
+	pi.on("context_with_system", (event, ctx) => {
+		observeDeclaration(ctx.sessionManager.getSessionId(), event.messages as Context["messages"]);
+	});
 	pi.on("agent_start", (_event, ctx) => {
+		setSnapshotSource(pi, ctx);
 		rejectedToolCalls.delete(ctx.sessionManager.getSessionId());
 	});
 	pi.on("session_shutdown", (_event, ctx) => {
