@@ -149,7 +149,7 @@ it("an off-chain result is never cut to a result that swallows a later pi result
 });
 
 it("a cut that cannot be resolved rebuilds the session instead of failing the turn", () => {
-	const history = [user("u1"), say("a1"), user("u2"), say("SECRET")];
+	const history = [user("u1"), say("a1"), user("SECRET"), say("a2")];
 	const { session, state } = seed(history);
 	state.uuids[1] = "absent-from-the-transcript";
 	const before = readFileSync(session.jsonlPath);

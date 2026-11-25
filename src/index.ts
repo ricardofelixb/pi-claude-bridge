@@ -616,9 +616,19 @@ function syncSharedSession(
 	const targetSessionId = session.sessionId;
 	let recorded: Recording;
 	let records = 0;
+	let kept: { transcript: ReturnType<typeof readTranscript>; cut: ReturnType<typeof resolveRecordingCut> } | undefined;
 	if (row === 6 || row === 7) {
-		const transcript = readTranscript(state!);
-		const cut = resolveRecordingCut(transcript, state!, compared.cutCount);
+		try {
+			const transcript = readTranscript(state!);
+			kept = { transcript, cut: resolveRecordingCut(transcript, state!, compared.cutCount) };
+		} catch (error) {
+			// A full import is always valid and costs one uncached request; failing the turn costs the turn.
+			debug(`sync: cannot keep the prefix of ${state!.ccSessionId} (${error instanceof Error ? error.message : error}); importing pi history ${sessionTag(piSessionId)}`);
+			row = 5;
+		}
+	}
+	if (kept) {
+		const { transcript, cut } = kept;
 		recorded = prefixRecording(state!, compared.cutCount);
 		if (row === 6) {
 			decision("fork", targetSessionId);
