@@ -68,3 +68,10 @@ export function continuationPromptEnv(overrides: Record<string, string> | undefi
 export function continuationChildEnv(env: NodeJS.ProcessEnv, continuation: Continuation): NodeJS.ProcessEnv {
 	return continuation.active ? { ...env, CLAUDE_CODE_RESUME_INTERRUPTED_TURN_MAX_AGE_MS: "0" } : env;
 }
+
+export function configureContinuationArgs(args: Record<string, string | null>, continuation: Continuation): void {
+	// Auto-resume can send the first API request before SDK initialize brings
+	// in pi's MCP manifest. The SDK normally gates resumes on initialize, but
+	// it skips that gate when the bridge supplies its own process spawner.
+	if (continuation.active) args["await-initialize"] = null;
+}

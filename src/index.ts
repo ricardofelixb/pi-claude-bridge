@@ -20,7 +20,7 @@ import { compareHistory, copyRecording, importHistory, LiveRecording, type Recor
 import { deleteSessionState, loadSessionState, saveSessionState } from "./session-store.js";
 import { newAssistantOutput, QueryContext, type AssistantStep } from "./query-state.js";
 import { makePromptStream, userMessage, type PromptStream } from "./prompt-stream.js";
-import { registerAccount, continuationChildEnv, continuationPromptEnv, continuationSyncRow, observeContinuationOutput, prepareContinuationPrompt, pushContinuationPrompt, observeDeclaration, setActiveToolsProbe, setSnapshotSource, warnIfToolless, withRememberedDeclarations } from "./fork/index.js";
+import { registerAccount, configureContinuationArgs, continuationChildEnv, continuationPromptEnv, continuationSyncRow, observeContinuationOutput, prepareContinuationPrompt, pushContinuationPrompt, observeDeclaration, setActiveToolsProbe, setSnapshotSource, warnIfToolless, withRememberedDeclarations } from "./fork/index.js";
 import { claudeCodeSettings, globalConfigPath, loadConfig, type Config } from "./config.js";
 import { collectCarriedAttachments } from "./attachments.js";
 import { createToolServer } from "./mcp-server.js";
@@ -1961,6 +1961,7 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 		const thinking = thinkingForReasoning(model, options?.reasoning);
 
 		const extraArgs: Record<string, string | null> = { "replay-user-messages": null };
+		configureContinuationArgs(extraArgs, continuation);
 		// Opus 4.7 defaults thinking.display to "omitted" (empty thinking text in stream).
 		// Force summarized so thinking_delta events arrive. See anthropics/claude-agent-sdk-python#830.
 		if (effort) extraArgs["thinking-display"] = "summarized";

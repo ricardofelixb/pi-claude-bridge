@@ -25,8 +25,10 @@ so upstream's `test:unit` glob runs them too. Do not install this worktree in pi
   - L1943–1948: `const pushPrompt = () => { ... };` wraps upstream's unchanged
     initial-record/push statements; it contains no fork policy.
   - L1949: `pushContinuationPrompt(queryCtx, continuation, pushPrompt);`
-  - L1982: `continuationPromptEnv(options?.env, continuation)` supplies trace env.
-  - L1987: `env: continuationChildEnv(childEnv, continuation)` sets launch env.
+  - L1964: `configureContinuationArgs(extraArgs, continuation)` restores the SDK's
+    `--await-initialize` gate, which it skips with a custom process spawner.
+  - L1983: `continuationPromptEnv(options?.env, continuation)` supplies trace env.
+  - L1988: `env: continuationChildEnv(childEnv, continuation)` sets launch env.
   Each policy hook is a one-line call; the other lines only carry its values.
 - Setting: automatic only for continuations ending at a tool result; ordinary
   user prompts keep upstream behavior. Uses child-only
@@ -40,6 +42,9 @@ so upstream's `test:unit` glob runs them too. Do not install this worktree in pi
   `diag/probe-haiku-continuation.mjs` compares the old note with the two
   same-turn notes live. `--no-tools` models the original empty tool snapshot:
   clearer wording is not a substitute for preserving tool declarations.
+  `tests/unit-fork-declarations.mjs` covers a rewrite with retained system deltas.
+  The `--await-initialize` contract in `tests/int-cc-contracts.mjs` delays the SDK
+  handshake and checks that the first resumed API request has the MCP tools.
 
 ## 2. Per-project Claude account
 
