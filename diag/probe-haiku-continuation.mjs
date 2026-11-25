@@ -1,13 +1,16 @@
 #!/usr/bin/env node
 // Compare Haiku's behavior at an interrupted tool result with the old rewrite
 // note and the two current bridge notes. Uses live Claude Code and paid calls:
-// node --import tsx diag/probe-haiku-continuation.mjs [runs-per-note] [old|rewrite|resume]
+// node --import tsx diag/probe-haiku-continuation.mjs [runs-per-note] [old|rewrite|resume] [--no-tools]
+// --no-tools models the original session's empty tool snapshot, before the
+// separate fix that preserves the bridge's declarations on a rewrite.
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createSdkMcpServer, query, tool } from "@anthropic-ai/claude-agent-sdk";
-import { z } from "zod";
+import { query } from "@anthropic-ai/claude-agent-sdk";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { createSession, deleteSession } from "cc-session-io";
 import { prepareContinuationPrompt, continuationChildEnv, continuationPromptEnv } from "../src/fork/continuation.ts";
 
@@ -15,7 +18,8 @@ const model = "claude-haiku-5-5";
 const oldNote = "[Your context was compacted. What precedes this is a summary plus the most recent messages, "
 	+ "ending with the tool result you were waiting for. Continue the task from there.]";
 const runs = Number(process.argv[2] ?? "6");
-const mode = process.argv[3];
+const noTools = process.argv.includes("--no-tools");
+const mode = process.argv.slice(3).find((arg) => arg !== "--no-tools");
 const arms = mode ? [mode] : ["old", "rewrite", "resume"];
 assert.ok(Number.isSafeInteger(runs) && runs > 0, "expected a positive trials-per-note count");
 assert.ok(arms.every((arm) => ["old", "rewrite", "resume"].includes(arm)), "unknown note");
@@ -37,14 +41,20 @@ async function trial(arm) {
 	const { continuation } = prepareContinuationPrompt([{ role: "toolResult" }], arm !== "resume", arm === "resume", () => null, () => null);
 	if (arm === "old") continuation.prompt = oldNote;
 	let reads = 0;
-	const server = createSdkMcpServer({ name: "custom-tools", tools: [
-		tool("web_search", "Search documentation.", { query: z.string() }, async () => ({ content: [{ type: "text", text: "No further results." }] })),
-		tool("compress", "Compact consumed context.", {}, async () => ({ content: [{ type: "text", text: "Already compacted." }] })),
-		tool("bash", "Execute a shell command in the sample repository and return its output.", { command: z.string() }, async () => {
-			reads++;
-			return { content: [{ type: "text", text: "core/functions.ts:8: onInvoiceSaved(recomputeInvoiceTotals);\ncore/functions.ts:9: onPaymentSaved(refreshAccountBalance);" }] };
-		}),
-	] });
+	const server = new McpServer({ name: "custom-tools", version: "1.0.0" }, { capabilities: { tools: {} } });
+	const tools = [
+		["web_search", "Search documentation.", { query: { type: "string" } }],
+		["compress", "Compact consumed context.", {}],
+		["bash", "Execute a shell command in the sample repository and return its output.", { command: { type: "string" } }],
+	].map(([name, description, properties]) => ({ name, description, inputSchema: { type: "object", properties } }));
+	server.server.setRequestHandler(ListToolsRequestSchema, () => ({ tools }));
+	server.server.setRequestHandler(CallToolRequestSchema, ({ params }) => {
+		// Never execute the model's command; the fixture serves a canned result.
+		if (params.name === "bash") reads++;
+		return { content: [{ type: "text", text: params.name === "bash"
+			? "core/functions.ts:8: onInvoiceSaved(recomputeInvoiceTotals);\ncore/functions.ts:9: onPaymentSaved(refreshAccountBalance);"
+			: "No further results." }] };
+	});
 	let finishInput;
 	const done = new Promise((resolve) => { finishInput = resolve; });
 	// Like the bridge, leave stdin open without sending another user message.
@@ -59,7 +69,8 @@ async function trial(arm) {
 			cwd, resume: session.sessionId, model, abortController, effort: "low",
 			systemPrompt: "You are a coding assistant running inside a harness. Help the user inspect files and run commands. Be concise in your responses.",
 			env: continuationChildEnv(continuationPromptEnv(undefined, continuation), continuation),
-			tools: [], mcpServers: { "custom-tools": server }, permissionMode: "bypassPermissions",
+			tools: [], mcpServers: noTools ? {} : { "custom-tools": { type: "sdk", name: "custom-tools", instance: server } },
+			permissionMode: "bypassPermissions",
 			allowDangerouslySkipPermissions: true, maxTurns: 1, settingSources: [],
 			extraArgs: { "strict-mcp-config": null },
 		} });
