@@ -33,6 +33,7 @@ import { createServer } from "node:http";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PassThrough } from "node:stream";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
@@ -1123,6 +1124,58 @@ test("CLAUDE_CODE_RESUME_INTERRUPTED_TURN_MAX_AGE_MS=1 stops CC resuming a turn 
 	} finally {
 		api.close();
 		for (const id of sessionIds) deleteSession(id, cwd, process.env.CLAUDE_CONFIG_DIR);
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("--await-initialize puts SDK tools on the first automatic resume request", { timeout: 25_000 }, async () => {
+	const requests = [];
+	const api = await stubApi(requests);
+	const cwd = mkdtempSync(join(tmpdir(), "cc-resume-mcp-"));
+	const claudeDir = process.env.CLAUDE_CONFIG_DIR;
+	const session = createSession({ projectPath: cwd, claudeDir, model: MODEL });
+	const note = "[Continue the fixture task after compression.]";
+	session.importMessages([
+		{ role: "user", content: "Compact and then call alpha." },
+		{ role: "assistant", content: [{ type: "tool_use", id: "toolu_compact_1", name: "mcp__custom-tools__compress", input: {} }] },
+		{ role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_compact_1", content: "Compacted." }] },
+	]);
+	session.save();
+	const abortController = new AbortController();
+	const watchdog = setTimeout(() => abortController.abort(), 15_000);
+	// No stdin prompt: only Claude Code's auto-resume can start the request.
+	async function* input() {
+		await once(abortController.signal, "abort");
+	}
+	const q = query({ prompt: input(), options: providerOptions({
+		cwd, resume: session.sessionId, maxTurns: 1, abortController, settingSources: [],
+		mcpServers: toolServer([noArgTool("alpha"), noArgTool("compress")], []),
+		extraArgs: { "strict-mcp-config": null, "await-initialize": null },
+		env: { ...process.env, ANTHROPIC_BASE_URL: api.url, ANTHROPIC_API_KEY: "offline-test", ENABLE_TOOL_SEARCH: "false",
+			ENABLE_CLAUDEAI_MCP_SERVERS: "0", CLAUDE_CODE_RESUME_INTERRUPTED_TURN: "1",
+			CLAUDE_CODE_RESUME_INTERRUPTED_TURN_MAX_AGE_MS: "0", CLAUDE_CODE_RESUME_PROMPT: note },
+		spawnClaudeCodeProcess(options) {
+			const child = spawn(options.command, options.args, { cwd: options.cwd, env: options.env, signal: options.signal, stdio: ["pipe", "pipe", "pipe"] });
+			child.stderr.resume();
+			// Run the real CLI and SDK, but expose the race by delaying delivery of
+			// the SDK initialize frame, not the manifest capture or tools/list.
+			const stdin = child.stdin;
+			child.stdin = new PassThrough();
+			const delivery = setTimeout(() => child.stdin.pipe(stdin), 1500);
+			child.once("close", () => clearTimeout(delivery));
+			return child;
+		},
+	}) });
+	try {
+		for await (const message of q) if (message.type === "result") break;
+		assert.ok(JSON.stringify(requests[0]?.messages)?.includes(note), "expected the automatic resume note on the first request");
+		assert.ok(requests[0].tools?.some((tool) => tool.name === "mcp__custom-tools__alpha"), "the first resumed request must have pi's MCP tools");
+	} finally {
+		clearTimeout(watchdog);
+		q.close();
+		abortController.abort();
+		api.close();
+		deleteSession(session.sessionId, cwd, claudeDir);
 		rmSync(cwd, { recursive: true, force: true });
 	}
 });
