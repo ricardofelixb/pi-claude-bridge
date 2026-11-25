@@ -106,6 +106,7 @@ describe("tool result with no parked query", () => {
 		assert.equal(calls[0].resumed, true, "Claude Code resumes the interrupted turn instead of reading a prompt (#274)");
 		assert.equal(calls[0].env.CLAUDE_CODE_RESUME_INTERRUPTED_TURN_MAX_AGE_MS, "0");
 		assert.match(calls[0].prompt, /interrupted and resumed/);
+		assert.match(calls[0].prompt, /same turn.*Do not reply to this note.*next tool call.*final answer/);
 		assert.equal(replyText(reply), "answer after restart");
 	});
 
@@ -142,6 +143,7 @@ describe("tool result with no parked query", () => {
 		assert.equal(calls.length, 1);
 		assert.equal(calls[0].resumed, true);
 		assert.match(calls[0].prompt, /context was compacted/);
+		assert.match(calls[0].prompt, /same turn.*Do not reply to this note.*next tool call.*final answer/);
 	});
 
 	it("after an abort, ends the turn without a query", async () => {

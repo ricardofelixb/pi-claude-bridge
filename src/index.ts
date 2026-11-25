@@ -20,7 +20,7 @@ import { compareHistory, copyRecording, importHistory, LiveRecording, type Recor
 import { deleteSessionState, loadSessionState, saveSessionState } from "./session-store.js";
 import { newAssistantOutput, QueryContext, type AssistantStep } from "./query-state.js";
 import { makePromptStream, userMessage, type PromptStream } from "./prompt-stream.js";
-import { registerAccount, continuationChildEnv, continuationPromptEnv, continuationSyncRow, observeContinuationOutput, prepareContinuationPrompt, pushContinuationPrompt, observeDeclaration, setActiveToolsProbe, setSnapshotSource, warnIfToolless, withRememberedDeclarations } from "./fork/index.js";
+import { registerAccount, configureContinuationArgs, continuationChildEnv, continuationPromptEnv, continuationSyncRow, observeContinuationOutput, prepareContinuationPrompt, pushContinuationPrompt, observeDeclaration, setActiveToolsProbe, setSnapshotSource, warnIfToolless, withRememberedDeclarations } from "./fork/index.js";
 import { claudeCodeSettings, globalConfigPath, loadConfig, type Config } from "./config.js";
 import { collectCarriedAttachments } from "./attachments.js";
 import { createToolServer } from "./mcp-server.js";
@@ -616,9 +616,20 @@ function syncSharedSession(
 	const targetSessionId = session.sessionId;
 	let recorded: Recording;
 	let records = 0;
+	let transcript: ReturnType<typeof readTranscript> | undefined;
+	let cut: ReturnType<typeof resolveRecordingCut> | undefined;
 	if (row === 6 || row === 7) {
-		const transcript = readTranscript(state!);
-		const cut = resolveRecordingCut(transcript, state!, compared.cutCount);
+		try {
+			transcript = readTranscript(state!);
+			cut = resolveRecordingCut(transcript, state!, compared.cutCount);
+		} catch (error) {
+			// Carry records if only the cut failed. If reading failed, don't retry it on import.
+			transcript ??= [];
+			debug(`sync: cannot keep the prefix of ${state!.ccSessionId} (${error instanceof Error ? error.message : error}); importing pi history ${sessionTag(piSessionId)}`);
+			row = 5;
+		}
+	}
+	if (cut && transcript) {
 		recorded = prefixRecording(state!, compared.cutCount);
 		if (row === 6) {
 			decision("fork", targetSessionId);
@@ -632,7 +643,7 @@ function syncSharedSession(
 	} else {
 		// Nothing is kept, but the old transcript's @file expansions and tool results
 		// still belong to messages pi kept unchanged.
-		const transcript = state ? readTranscript(state) : [];
+		transcript ??= state ? readTranscript(state) : [];
 		recorded = importHistory(session, priors, customToolNameToSdk, collectCarriedAttachments(transcript), recordedToolResults(transcript, state?.digests ?? [], priors));
 		session.save();
 		records = session.records.length;
@@ -1950,6 +1961,7 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 		const thinking = thinkingForReasoning(model, options?.reasoning);
 
 		const extraArgs: Record<string, string | null> = { "replay-user-messages": null };
+		configureContinuationArgs(extraArgs, continuation);
 		// Opus 4.7 defaults thinking.display to "omitted" (empty thinking text in stream).
 		// Force summarized so thinking_delta events arrive. See anthropics/claude-agent-sdk-python#830.
 		if (effort) extraArgs["thinking-display"] = "summarized";

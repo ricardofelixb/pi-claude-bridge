@@ -95,6 +95,25 @@ describe("fresh query after a compaction", () => {
 		assert.equal(launches[1].systemPrompt.append, PROMPT, "and pi's prompt");
 	});
 
+	it("initializes SDK tools before automatically continuing an ACP rewrite", async () => {
+		const id = "pi-acp-deltas";
+		const rule = { role: "system", content: "Updated job rules", timestamp: 5 };
+		const added = { role: "system", content: "", toolsAdded: [piTools()[2]], timestamp: 6 };
+		const ask = user("first job");
+		const next = user("continued job");
+		await run({ messages: [head(), ask, rule, next, added] }, id);
+		assert.deepEqual(await servedTools(launches[0]), ["read", "bash", "grep"]);
+		assert.equal(Object.hasOwn(launches[0].extraArgs, "await-initialize"), false);
+
+		// ACP drops the old base, but keeps a prompt-only delta and a tool addition.
+		markRebuildForSession(id, "ACP rewrite");
+		const rebuilt = await run({ messages: [user("[ACP summary]"), rule, next, added, call("toolu_1"), toolResult("toolu_1")] }, id);
+		assert.equal(rebuilt.stopReason, "stop", rebuilt.errorMessage);
+		assert.ok(launches[1].resume, "a rebuilt transcript is resumed");
+		assert.deepEqual(await servedTools(launches[1]), ["read", "bash", "grep"]);
+		assert.equal(launches[1].extraArgs["await-initialize"], null, "CC must not auto-resume before SDK tools initialize");
+	});
+
 	it("takes the tools a call declares over the remembered ones", async () => {
 		await run({ messages: [head(), user("one")] }, "pi-changed");
 		await run({ messages: [head([tools[0]]), user("one"), call("toolu_1"), toolResult("toolu_1"), user("two")] }, "pi-changed");
