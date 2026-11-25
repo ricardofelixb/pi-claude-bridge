@@ -39,8 +39,8 @@ function boundaryIndex(records: readonly RecordEntry[], uuid: string | null): nu
 	return index;
 }
 
-export function resolveCut(records: readonly RecordEntry[], uuid: string | null): { uuid: string; index: number } {
-	const index = boundaryIndex(records, uuid);
+/** The uuids from the last record back through its parents. */
+function primaryChain(records: readonly RecordEntry[]): Set<string> {
 	const byUuid = new Map(records.filter(chainEntry).map((r) => [r.uuid!, r]));
 	const path = new Set<string>();
 	let leaf = [...records].reverse().find(chainEntry);
@@ -49,6 +49,14 @@ export function resolveCut(records: readonly RecordEntry[], uuid: string | null)
 		path.add(leaf.uuid);
 		leaf = leaf.parentUuid ? byUuid.get(leaf.parentUuid) : undefined;
 	}
+	return path;
+}
+
+export function resolveCut(records: readonly RecordEntry[], uuid: string | null): { uuid: string; index: number } {
+	return cutAt(records, boundaryIndex(records, uuid), primaryChain(records));
+}
+
+function cutAt(records: readonly RecordEntry[], index: number, path: ReadonlySet<string>): { uuid: string; index: number } {
 	let resolved = records[index].uuid!;
 	if (!path.has(resolved)) throw new Error(`Cut boundary ${resolved} is not on the primary parent chain`);
 	let end = index;
@@ -63,6 +71,29 @@ export function resolveCut(records: readonly RecordEntry[], uuid: string | null)
 	return { uuid: resolved, index: end };
 }
 
+const toolResultOnly = (record: RecordEntry): boolean => {
+	const content = record.type === "user" ? (record.message as { content?: unknown } | undefined)?.content : undefined;
+	return Array.isArray(content) && content.length > 0 && content.every((block) => block?.type === "tool_result");
+};
+
+/** Claude Code answers a call pi never saw (an unqualified `bash`) itself and
+ * chains the next record to that answer, so pi's own result, written before
+ * it, is a sibling off the primary chain. Move the boundary to the last
+ * on-chain result of the same group (the results after it, up to the next
+ * assistant, user prompt or steer). Both results stay in the kept prefix with
+ * their tool_use blocks. `index` when the group has no on-chain result after
+ * it; a later pi result inside the moved cut is rejected by the caller. */
+function onChainResult(records: readonly RecordEntry[], index: number, path: ReadonlySet<string>): number {
+	if (!toolResultOnly(records[index]) || path.has(records[index].uuid!)) return index;
+	let found = index;
+	for (let i = index + 1; i < records.length; i++) {
+		const record = records[i];
+		if (record.type === "assistant" || record.attachment?.type === "queued_command" || (record.type === "user" && !toolResultOnly(record))) break;
+		if (record.type === "user" && path.has(record.uuid!)) found = i;
+	}
+	return found;
+}
+
 /** Live result/replay order can differ from disk order. Retain all anchors
  * of the logical prefix, not just the last slot's own UUID. */
 export function resolveRecordingCut(records: readonly RecordEntry[], recorded: Recording, count: number): { uuid: string; index: number } {
@@ -70,7 +101,8 @@ export function resolveRecordingCut(records: readonly RecordEntry[], recorded: R
 	if (!count || count > recorded.digests.length || !recorded.cuttable[count - 1]) throw new Error(`Invalid session cut count ${count}`);
 	const retained = recorded.uuids.slice(0, count).filter((uuid): uuid is string => uuid !== null);
 	const index = Math.max(...retained.map((uuid) => boundaryIndex(records, uuid)));
-	const cut = resolveCut(records, records[index].uuid!);
+	const path = primaryChain(records);
+	const cut = cutAt(records, onChainResult(records, index, path), path);
 	// A later anchor absent from the file (a torn final append) cannot be inside the cut.
 	for (const uuid of recorded.uuids.slice(count)) {
 		const index = uuid === null ? -1 : findBoundary(records, uuid);
