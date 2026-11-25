@@ -88,6 +88,83 @@ it("row7 retains parallel siblings in its file and the native SDK request", { ti
 	assert.deepEqual(readFileSync(source.jsonlPath), before);
 });
 
+// Shaped like a real transcript: the model called pi's tool and an unqualified `bash` in
+// one message; Claude Code answered `bash` itself, pi never saw it, and the chain runs
+// through Claude Code's answer while pi's result is a sibling branch off the tool_use.
+function seedOwnAnswer() {
+	const source = createSession({ projectPath: root, model: "sonnet" });
+	const prompt = source.addUserMessage("parallel");
+	const call = source.addAssistantMessage([{ type: "tool_use", id: "S", name: "Read", input: {} }]);
+	const bashCall = source.addAssistantMessage([{ type: "tool_use", id: "B", name: "bash", input: {} }]);
+	const piResult = source.addToolResults([{ toolUseId: "S", content: "value-S" }]);
+	const ownResult = source.addToolResults([{ toolUseId: "B", content: "No such tool available: bash", isError: true }]);
+	const snapshot = source.addAttachment({ type: "prompt_snapshot", systemPrompt: ["kept native snapshot"] });
+	const tail = source.addAssistantMessage([{ type: "text", text: "SECRET" }]);
+	source.save();
+	const apiId = source.records.find((r) => r.uuid === call).message.id;
+	const parents = { [piResult]: call, [ownResult]: bashCall };
+	const records = source.records.map((r) => r.uuid === bashCall ? { ...r, message: { ...r.message, id: apiId } } : r.uuid in parents ? { ...r, parentUuid: parents[r.uuid] } : r);
+	writeFileSync(source.jsonlPath, records.map((r) => JSON.stringify(r) + "\n").join(""));
+	const history = [user("parallel"), assistant([tool("S")]), result("S"), say("SECRET")];
+	const state = { ccSessionId: source.sessionId, cwd: root, model: "sonnet", promptDigest: "", dirtyTail: false, digests: digestMessages(history), uuids: [prompt, bashCall, piResult, tail], cuttable: [true, false, true, true] };
+	__test.setSharedSession("pi", state);
+	return { source, history, state, uuids: { prompt, call, bashCall, piResult, ownResult, snapshot, tail } };
+}
+
+it("a cut at pi's result moves to Claude Code's own answer to the same assistant turn's other call", { timeout: 30_000 }, async () => {
+	const { source, history, state, uuids } = seedOwnAnswer();
+	const records = readTranscript(state);
+	assert.throws(() => resolveCut(records, uuids.piResult), /primary parent chain/, "pi's result is off the primary chain");
+	const cut = resolveRecordingCut(records, state, 3);
+	assert.equal(cut.uuid, uuids.snapshot, "the cut runs through Claude Code's answer and its attachment run");
+	assert.equal(records[cut.index - 1].uuid, uuids.ownResult);
+	const before = readFileSync(source.jsonlPath);
+	const synced = sync([...history.slice(0, 3), say("REDACTED")]);
+	assert.equal(synced.created, true);
+	const written = readFileSync(openSession({ sessionId: synced.targetSessionId, projectPath: root }).jsonlPath, "utf8");
+	for (const kept of [uuids.call, uuids.bashCall, uuids.piResult, uuids.ownResult, "value-S", "No such tool available: bash", "kept native snapshot", "REDACTED"]) assert.match(written, new RegExp(kept));
+	assert.doesNotMatch(written, /SECRET/);
+	assert.deepEqual(synced.recorded.digests, digestMessages([...history.slice(0, 3), say("REDACTED")]));
+	assert.deepEqual(readFileSync(source.jsonlPath), before);
+	const body = await nativeRequest(synced.targetSessionId);
+	const sent = JSON.stringify(body.messages);
+	assert.match(sent, /value-S/);
+	assert.match(sent, /No such tool available: bash/);
+	assert.doesNotMatch(sent, /SECRET/);
+});
+
+it("an off-chain result is never cut to a result that swallows a later pi result", () => {
+	const history = [user("warm"), say("warm answer"), user("parallel"), assistant([tool("X"), tool("Y")]), result("X"), result("Y"), say("SECRET")];
+	const source = createSession({ projectPath: root, model: "sonnet" });
+	const uuids = [source.addUserMessage("warm"), source.addAssistantMessage([{ type: "text", text: "warm answer" }]), source.addUserMessage("parallel"), source.addAssistantMessage(["X", "Y"].map((id) => ({ type: "tool_use", id, name: "Read", input: {} })))];
+	uuids.push(source.addToolResults([{ toolUseId: "X", content: "value-X" }]));
+	uuids.push(source.addToolResults([{ toolUseId: "Y", content: "value-Y" }]));
+	uuids.push(source.addAssistantMessage([{ type: "text", text: "SECRET" }]));
+	source.save();
+	const records = source.records.map((r) => r.uuid === uuids[5] ? { ...r, parentUuid: uuids[3] } : r);
+	writeFileSync(source.jsonlPath, records.map((r) => JSON.stringify(r) + "\n").join(""));
+	// Slot 4 is not a real cut (mid-batch); mark it cuttable to ask for the one that would swallow Y.
+	const state = { ccSessionId: source.sessionId, cwd: root, model: "sonnet", promptDigest: "", dirtyTail: false, digests: digestMessages(history), uuids, cuttable: [true, true, true, false, true, true, true] };
+	assert.throws(() => resolveRecordingCut(readTranscript(state), state, 5), new RegExp(`later pi content at ${uuids[5]}`));
+});
+
+it("a cut that cannot be resolved rebuilds the session instead of failing the turn", () => {
+	const history = [user("u1"), say("a1"), user("u2"), say("SECRET")];
+	const { session, state } = seed(history);
+	state.uuids[1] = "absent-from-the-transcript";
+	const before = readFileSync(session.jsonlPath);
+	assert.throws(() => resolveRecordingCut(readTranscript(state), state, 2), /absent/);
+	const synced = sync([history[0], history[1], user("REDACTED"), history[3]]);
+	assert.equal(synced.created, true);
+	assert.equal(synced.forkAt, undefined);
+	assert.notEqual(synced.targetSessionId, session.sessionId);
+	const written = readFileSync(openSession({ sessionId: synced.targetSessionId, projectPath: root }).jsonlPath, "utf8");
+	assert.match(written, /REDACTED/);
+	assert.doesNotMatch(written, /SECRET/);
+	assert.deepEqual(synced.recorded.digests, digestMessages([history[0], history[1], user("REDACTED"), history[3]]));
+	assert.deepEqual(readFileSync(session.jsonlPath), before);
+});
+
 it("row7 carries only suffix @files, rebasing ordinals without duplicating an identical prefix prompt", () => {
 	const prompt = "review @fixture";
 	const history = [user(prompt), say("SECRET"), user(prompt), say("later answer")];
