@@ -221,13 +221,20 @@ it("a later anchor torn from the file is outside an earlier cut, but a retained 
 	assert.doesNotMatch(written, /"u2"/);
 });
 
-it("a malformed committed line fails, whether interior or final", () => {
+it("a malformed committed line prevents a prefix cut but still allows a rebuild", () => {
 	for (const torn of ['{"unfinished":\n{"type":"summary"}\n', '{"unfinished":\n']) {
 		const history = [user("a"), say("b")];
 		const { session, state } = seed(history);
 		state.dirtyTail = true;
 		appendFileSync(session.jsonlPath, torn);
-		assert.throws(() => sync(history), SyntaxError);
+		const before = readFileSync(session.jsonlPath);
+		assert.throws(() => readTranscript(state), SyntaxError);
+		const synced = sync(history);
+		assert.equal(synced.sessionId, synced.targetSessionId);
+		assert.notEqual(synced.sessionId, session.sessionId);
+		assert.equal(synced.forkAt, undefined);
+		assert.deepEqual(synced.recorded.digests, digestMessages(history));
+		assert.deepEqual(readFileSync(session.jsonlPath), before);
 	}
 });
 
