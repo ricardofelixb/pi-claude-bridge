@@ -8,12 +8,10 @@ import type { QueryContext } from "../query-state.js";
 import { ccChildEnv } from "../cc-child.js";
 import { debug } from "../debug.js";
 
-const CONTINUE_AFTER_REWRITE_PROMPT =
-	"[Your context was compacted. What precedes this is a summary plus the most recent messages, "
-	+ "ending with the tool result you were waiting for. Continue the task from there.]";
-const CONTINUE_AFTER_RESUME_PROMPT =
-	"[Your session was interrupted and resumed. What precedes this ends with the tool result "
-	+ "you were waiting for. Continue the task from there.]";
+const CONTINUE_SAME_TURN = "This is the same turn. Do not reply to this note. "
+	+ "Use the tool result above and make your next tool call, or give your final answer if the task is done.";
+const CONTINUE_AFTER_REWRITE_PROMPT = `[Your context was compacted. ${CONTINUE_SAME_TURN}]`;
+const CONTINUE_AFTER_RESUME_PROMPT = `[Your session was interrupted and resumed. ${CONTINUE_SAME_TURN}]`;
 const CONTINUATION_FALLBACK_MS = 30_000;
 
 interface Continuation {
