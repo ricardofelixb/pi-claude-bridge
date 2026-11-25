@@ -616,19 +616,20 @@ function syncSharedSession(
 	const targetSessionId = session.sessionId;
 	let recorded: Recording;
 	let records = 0;
-	let kept: { transcript: ReturnType<typeof readTranscript>; cut: ReturnType<typeof resolveRecordingCut> } | undefined;
+	let transcript: ReturnType<typeof readTranscript> | undefined;
+	let cut: ReturnType<typeof resolveRecordingCut> | undefined;
 	if (row === 6 || row === 7) {
 		try {
-			const transcript = readTranscript(state!);
-			kept = { transcript, cut: resolveRecordingCut(transcript, state!, compared.cutCount) };
+			transcript = readTranscript(state!);
+			cut = resolveRecordingCut(transcript, state!, compared.cutCount);
 		} catch (error) {
-			// A full import is always valid and costs one uncached request; failing the turn costs the turn.
+			// Carry records if only the cut failed. If reading failed, don't retry it on import.
+			transcript ??= [];
 			debug(`sync: cannot keep the prefix of ${state!.ccSessionId} (${error instanceof Error ? error.message : error}); importing pi history ${sessionTag(piSessionId)}`);
 			row = 5;
 		}
 	}
-	if (kept) {
-		const { transcript, cut } = kept;
+	if (cut && transcript) {
 		recorded = prefixRecording(state!, compared.cutCount);
 		if (row === 6) {
 			decision("fork", targetSessionId);
@@ -642,7 +643,7 @@ function syncSharedSession(
 	} else {
 		// Nothing is kept, but the old transcript's @file expansions and tool results
 		// still belong to messages pi kept unchanged.
-		const transcript = state ? readTranscript(state) : [];
+		transcript ??= state ? readTranscript(state) : [];
 		recorded = importHistory(session, priors, customToolNameToSdk, collectCarriedAttachments(transcript), recordedToolResults(transcript, state?.digests ?? [], priors));
 		session.save();
 		records = session.records.length;

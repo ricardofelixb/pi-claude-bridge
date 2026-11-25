@@ -19,14 +19,14 @@ so upstream's `test:unit` glob runs them too. Do not install this worktree in pi
   - L572: optional `continuation = false` parameter on `syncSharedSession`.
   - L594: `let row` instead of `const row` allows the policy hook to select it.
   - L600: `row = continuationSyncRow(row, compared.cutCount, continuation);`
-  - L1072: `observeContinuationOutput(message, c);`
-  - L1905: `let { promptBlocks, promptText, continuation } = prepareContinuationPrompt(context.messages, historyRewritten, unparkedToolResult, extractUserPromptBlocks, extractUserPrompt);`
-  - L1906: `syncSharedSession(..., continuation.active)` passes the decision.
-  - L1942–1947: `const pushPrompt = () => { ... };` wraps upstream's unchanged
+  - L1073: `observeContinuationOutput(message, c);`
+  - L1906: `let { promptBlocks, promptText, continuation } = prepareContinuationPrompt(context.messages, historyRewritten, unparkedToolResult, extractUserPromptBlocks, extractUserPrompt);`
+  - L1907: `syncSharedSession(..., continuation.active)` passes the decision.
+  - L1943–1948: `const pushPrompt = () => { ... };` wraps upstream's unchanged
     initial-record/push statements; it contains no fork policy.
-  - L1948: `pushContinuationPrompt(queryCtx, continuation, pushPrompt);`
-  - L1981: `continuationPromptEnv(options?.env, continuation)` supplies trace env.
-  - L1986: `env: continuationChildEnv(childEnv, continuation)` sets launch env.
+  - L1949: `pushContinuationPrompt(queryCtx, continuation, pushPrompt);`
+  - L1982: `continuationPromptEnv(options?.env, continuation)` supplies trace env.
+  - L1987: `env: continuationChildEnv(childEnv, continuation)` sets launch env.
   Each policy hook is a one-line call; the other lines only carry its values.
 - Setting: automatic only for continuations ending at a tool result; ordinary
   user prompts keep upstream behavior. Uses child-only
@@ -36,7 +36,10 @@ so upstream's `test:unit` glob runs them too. Do not install this worktree in pi
   End-to-end provider mocks: `tests/unit-orphan-result-after-restart.mjs`
   (restart, rewrite, 30s fallback, ordinary env) and
   `tests/unit-query-lifecycle.mjs` (discard, reload, termination).
-  Their existing fake SDKs understand interrupted-turn resume; no paid calls.
+  Their fake SDKs understand interrupted-turn resume; no paid calls.
+  `diag/probe-haiku-continuation.mjs` compares the old note with the two
+  same-turn notes live. `--no-tools` models the original empty tool snapshot:
+  clearer wording is not a substitute for preserving tool declarations.
 
 ## 2. Per-project Claude account
 
@@ -48,7 +51,7 @@ so upstream's `test:unit` glob runs them too. Do not install this worktree in pi
   `src/config.ts:67` returns
   `withProjectAccount({ askClaude: global.askClaude, provider }, cwd, tryParseJson)`
   after upstream's `systemPromptPreset` normalization.
-  `src/index.ts:23` imports the shared fork barrel and `src/index.ts:2218`
+  `src/index.ts:23` imports the shared fork barrel and `src/index.ts:2219`
   calls `registerAccount(pi, providerSettings)`.
 - Setting: `provider.account`, global or project `.pi/claude-bridge.json`;
   project account overrides global account, no other project provider settings
@@ -95,10 +98,9 @@ so upstream's `test:unit` glob runs them too. Do not install this worktree in pi
 
 ## 7. Cut at Claude Code's own answer — upstream candidate (#272)
 
-- Kind: generally useful bug fix; upstream issue #272. No upstream PR is
-  authorized by this job. Built upstream-ready (upstream conventions, tests,
-  changelog entry); it edits upstream files and adds no `src/fork/` hook, so
-  when upstream fixes #272, take its fix and delete this entry.
+- Kind: generally useful bug fix; upstream issue #272. It edits upstream
+  files and adds no `src/fork/` hook. When upstream fixes #272, take its fix
+  and delete this entry.
 - Bug: the model calls a pi tool and an unqualified `bash` in one message, Claude
   Code answers `bash` itself, and its answer, not pi's result, is what the chain
   continues from. A history rewrite (ACP `compress`) then cut at pi's result,
@@ -106,7 +108,7 @@ so upstream's `test:unit` glob runs them too. Do not install this worktree in pi
 - Implementation: `onChainResult` in `src/session-transcript.ts` moves an
   off-chain tool-result boundary to the same group's on-chain result;
   `resolveRecordingCut` still rejects a cut that includes a later pi result.
-  `src/index.ts` `syncSharedSession` (L619–L629) rebuilds from pi's history,
+  `src/index.ts` `syncSharedSession` (L619–L631) rebuilds from pi's history,
   with a debug line, when rows 6/7 cannot read or resolve the prefix.
 - Setting: none. Tests: `tests/unit-session-prefix.mjs` (real-shaped fixture
   with a native-request check, the later-pi-result guard, the rebuild fallback).
