@@ -2,10 +2,11 @@
 
 ## UNRELEASED
 
+- **Fix: no stray `"No response requested."` reply when resuming after a tool result (#274)** — Applies to the bundled Claude Code after mid-turn compaction or restart. Thanks @steve-wecompare, @ricardofelixb, @georgeharker and @alfred-marketingagranel.
 - **Fix: a compress right after a call Claude Code answered itself no longer fails the turn (#272)** — When the model calls a pi tool together with an unqualified name such as `bash`, Claude Code answers that call itself and chains to its answer, so rewriting pi's history there threw "Cut boundary … is not on the primary parent chain" and pi fell back to another model. The cut now runs through that answer, and any cut that still can't be resolved rebuilds the session instead of failing the turn.
 - **Fix: continuation prompts tell Claude to finish the interrupted turn** — After compaction or restart, Claude is told to make its next tool call or give the final answer, not acknowledge the resume note.
 - **Fix: no tools or prompt after pi compacts** — The bridge preserves pi's declarations across rewrites and makes Claude Code wait for SDK initialization before automatically resuming, so the first rebuilt request has pi's tools.
-- **Refactor: isolate fork features for upstream syncs** — sync upstream 0.13.0 while keeping project account and interrupted-turn behavior in `src/fork/`, with documented hooks and fork regression tests.
+- **Refactor: isolate fork features for upstream syncs** — sync upstream 0.13.0 while keeping project account and the fork's continuation changes in `src/fork/`; the fork's own #274 fix gave way to upstream's, with documented hooks and fork regression tests.
 - **Add: per-project Claude account (`provider.account`)** — a project's `.pi/claude-bridge.json` can name a login, e.g. `"banx"`, and Claude Code runs with `CLAUDE_CONFIG_DIR=~/.claude-accounts/<name>`. A missing login fails as not logged in rather than falling back to the default account; `/claude-account` shows the project's account and who it is signed in as, `/claude-account <name>` or `/claude-account default` switches it (keeping the file out of git) and reloads, `/claude-account login` signs in from inside pi (asking before it creates a new login folder), and `/claude-account logout` signs the project's account out.
 
 ## 0.13.0 — 2026-11-16

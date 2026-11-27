@@ -4,47 +4,32 @@ Fork: `ricardofelixb/pi-claude-bridge`; upstream: `elidickinson/pi-claude-bridge
 (remote `upstream`). Fork code belongs in `src/fork/`; tests use `unit-fork-*.mjs`
 so upstream's `test:unit` glob runs them too. Do not install this worktree in pi.
 
-## 1. Continue at a tool result — top upstream candidate (#274)
+## 1. Continue at a tool result: upstream-owned since `ca1fbfc`
 
-- Kind: generally useful bug fix; upstream issue #274, fork PR #6 (`0e9ff15`).
-  Upstream `5ea9bb8` (0.13.0) has not fixed it. Upstreaming this removes several hooks; no upstream
-  PR is authorized by this job. Multiple single-line hooks in `src/index.ts` are
-  explicitly approved because session selection, input, output and child env
-  must agree on whether Claude Code resumes the interrupted turn itself.
-- Implementation: `src/fork/continuation.ts`, re-exported by `src/fork/index.ts`.
-  Upstream `src/query-state.ts` is restored exactly: output tracking uses a
-  fork-owned weak set, so completed queries are not retained.
-- All hook/wiring lines in `src/index.ts` (line numbers refreshed after merge):
-  - L23: the single `./fork/index.js` import (shared with account registration).
-  - L572: optional `continuation = false` parameter on `syncSharedSession`.
-  - L594: `let row` instead of `const row` allows the policy hook to select it.
-  - L600: `row = continuationSyncRow(row, compared.cutCount, continuation);`
-  - L1073: `observeContinuationOutput(message, c);`
-  - L1906: `let { promptBlocks, promptText, continuation } = prepareContinuationPrompt(context.messages, historyRewritten, unparkedToolResult, extractUserPromptBlocks, extractUserPrompt);`
-  - L1907: `syncSharedSession(..., continuation.active)` passes the decision.
-  - L1943–1948: `const pushPrompt = () => { ... };` wraps upstream's unchanged
-    initial-record/push statements; it contains no fork policy.
-  - L1949: `pushContinuationPrompt(queryCtx, continuation, pushPrompt);`
-  - L1964: `configureContinuationArgs(extraArgs, continuation)` restores the SDK's
-    `--await-initialize` gate, which it skips with a custom process spawner.
-  - L1983: `continuationPromptEnv(options?.env, continuation)` supplies trace env.
-  - L1988: `env: continuationChildEnv(childEnv, continuation)` sets launch env.
-  Each policy hook is a one-line call; the other lines only carry its values.
-- Setting: automatic only for continuations ending at a tool result; ordinary
-  user prompts keep upstream behavior. Uses child-only
-  `CLAUDE_CODE_RESUME_INTERRUPTED_TURN`, `CLAUDE_CODE_RESUME_PROMPT` and
-  `CLAUDE_CODE_RESUME_INTERRUPTED_TURN_MAX_AGE_MS`; 30s no-output fallback.
-- Fork test: `tests/unit-fork-session-sync.mjs` (#274 prefix-write regression).
-  End-to-end provider mocks: `tests/unit-orphan-result-after-restart.mjs`
-  (restart, rewrite, 30s fallback, ordinary env) and
-  `tests/unit-query-lifecycle.mjs` (discard, reload, termination).
-  Their fake SDKs understand interrupted-turn resume; no paid calls.
-  `diag/probe-haiku-continuation.mjs` compares the old note with the two
-  same-turn notes live. `--no-tools` models the original empty tool snapshot:
-  clearer wording is not a substitute for preserving tool declarations.
-  `tests/unit-fork-declarations.mjs` covers a rewrite with retained system deltas.
-  The `--await-initialize` contract in `tests/int-cc-contracts.mjs` delays the SDK
-  handshake and checks that the first resumed API request has the MCP tools.
+- Kind: generally useful bug fix (#274). Upstream `ca1fbfc` fixed it its own way: it
+  writes the prompt into the transcript and lets the bundled Claude Code resume it.
+  That replaced the fork's resume-prompt env, sync-row override, 30s stdin fallback
+  and output tracking (fork PR #6, `0e9ff15`); their fork tests went with them.
+- The fork keeps two changes on top, in `src/fork/continuation.ts` (re-exported by
+  `src/fork/index.ts`), both upstream candidates:
+  - Continuation note wording (fork PR #9): `CONTINUE_AFTER_REWRITE_PROMPT` and
+    `CONTINUE_AFTER_RESUME_PROMPT` tell Claude the turn goes on and to make its next
+    tool call or give the final answer. Upstream's two constants are deleted from
+    `src/index.ts`; L23 imports the fork's, used unchanged at L1934.
+  - `--await-initialize` before an automatic resume (fork PR #9): the SDK skips its
+    initialize gate with a custom spawner, so the first resumed request could miss
+    pi's MCP tools. Hook: L2002 `configureResumeArgs(extraArgs, Boolean(inlinePromptUuid));`.
+- Keep pi's tools when compaction drops the system message (fork PR #8):
+  `src/fork/declarations.ts`. Hooks in `src/index.ts`: L23 import,
+  L1765 `withRememberedDeclarations`, L1898 `warnIfToolless`, L2266
+  `setActiveToolsProbe`, L2300/L2331 `setSnapshotSource`, L2327–L2329 the
+  `context_with_system` handler calling `observeDeclaration`.
+- Setting: none. Tests: `tests/unit-orphan-result-after-restart.mjs` (note wording
+  after restart and after compaction), `tests/unit-fork-declarations.mjs`,
+  `tests/unit-rebuild-keeps-tools.mjs`, and the `--await-initialize` contract in
+  `tests/int-cc-contracts.mjs` (inline prompt, delayed SDK handshake, first resumed
+  request has the MCP tools). `diag/probe-haiku-continuation.mjs` compares the old
+  note with the two fork notes live; `--no-tools` models an empty tool snapshot.
 
 ## 2. Per-project Claude account
 
@@ -56,7 +41,7 @@ so upstream's `test:unit` glob runs them too. Do not install this worktree in pi
   `src/config.ts:67` returns
   `withProjectAccount({ askClaude: global.askClaude, provider }, cwd, tryParseJson)`
   after upstream's `systemPromptPreset` normalization.
-  `src/index.ts:23` imports the shared fork barrel and `src/index.ts:2219`
+  `src/index.ts:23` imports the shared fork barrel and `src/index.ts:2265`
   calls `registerAccount(pi, providerSettings)`.
 - Setting: `provider.account`, global or project `.pi/claude-bridge.json`;
   project account overrides global account, no other project provider settings
@@ -113,7 +98,7 @@ so upstream's `test:unit` glob runs them too. Do not install this worktree in pi
 - Implementation: `onChainResult` in `src/session-transcript.ts` moves an
   off-chain tool-result boundary to the same group's on-chain result;
   `resolveRecordingCut` still rejects a cut that includes a later pi result.
-  `src/index.ts` `syncSharedSession` (L619–L631) rebuilds from pi's history,
+  `src/index.ts` `syncSharedSession` (L639–L649) rebuilds from pi's history,
   with a debug line, when rows 6/7 cannot read or resolve the prefix.
 - Setting: none. Tests: `tests/unit-session-prefix.mjs` (real-shaped fixture
   with a native-request check, the later-pi-result guard, the rebuild fallback).
@@ -132,6 +117,10 @@ so upstream's `test:unit` glob runs them too. Do not install this worktree in pi
 - Commit extractions before `git merge --no-ff upstream/main`. Keep upstream
   code in conflicts and reattach these hooks; rerere is enabled. Walk every
   entry's hook, setting and regression test after merging.
+- Post-merge audit at upstream `ca1fbfc`: entry 1's #274 fix is now upstream's;
+  entries 2–7 and the fork's continuation note, `--await-initialize` and
+  declaration hooks are in place. Upstream's inline-prompt resume, alternate
+  executable stdin path and reserved-marker handling are kept unchanged.
 - Post-merge audit at upstream `5ea9bb8`: all six entries above retain their
   hooks, settings and tests; #77 remains upstream-owned. Upstream's whole-prompt
   forwarding, preset normalization, rejected-tool-call handling and Mythos model
