@@ -12,7 +12,8 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { createSession, deleteSession } from "cc-session-io";
-import { prepareContinuationPrompt, continuationChildEnv, continuationPromptEnv } from "../src/fork/continuation.ts";
+import { CONTINUE_AFTER_RESUME_PROMPT, CONTINUE_AFTER_REWRITE_PROMPT } from "../src/fork/continuation.ts";
+import { ccChildEnv } from "../src/cc-child.ts";
 
 const model = "claude-haiku-5-5";
 const oldNote = "[Your context was compacted. What precedes this is a summary plus the most recent messages, "
@@ -37,9 +38,10 @@ async function trial(arm) {
 		{ role: "assistant", content: [{ type: "tool_use", id: "toolu_probe_compact", name: "mcp__custom-tools__compress", input: {} }] },
 		{ role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_probe_compact", content: "▣ ACP | 64.6K → 32.3K tokens (~32.4K reclaimed, blocks: b6=m00286–m00369)\n · b6 summary 19865ch · head \"TASK AS OF THIS BLOCK (open, current)\" … tail \"Open objectives: explorer report, this task, current.\"" }] },
 	]);
+	// Like the bridge, write the note into the transcript for CC to resume (#274).
+	const note = arm === "old" ? oldNote : arm === "resume" ? CONTINUE_AFTER_RESUME_PROMPT : CONTINUE_AFTER_REWRITE_PROMPT;
+	session.addUserMessage(note);
 	session.save();
-	const { continuation } = prepareContinuationPrompt([{ role: "toolResult" }], arm !== "resume", arm === "resume", () => null, () => null);
-	if (arm === "old") continuation.prompt = oldNote;
 	let reads = 0;
 	const server = new McpServer({ name: "custom-tools", version: "1.0.0" }, { capabilities: { tools: {} } });
 	const tools = [
@@ -68,11 +70,11 @@ async function trial(arm) {
 		q = query({ prompt: input(), options: {
 			cwd, resume: session.sessionId, model, abortController, effort: "low",
 			systemPrompt: "You are a coding assistant running inside a harness. Help the user inspect files and run commands. Be concise in your responses.",
-			env: continuationChildEnv(continuationPromptEnv(undefined, continuation), continuation),
+			env: { ...ccChildEnv({ CLAUDE_CODE_RESUME_INTERRUPTED_TURN: "1", CLAUDE_CODE_RESUME_PROMPT: "" }), CLAUDE_CODE_RESUME_INTERRUPTED_TURN_MAX_AGE_MS: "0" },
 			tools: [], mcpServers: noTools ? {} : { "custom-tools": { type: "sdk", name: "custom-tools", instance: server } },
 			permissionMode: "bypassPermissions",
 			allowDangerouslySkipPermissions: true, maxTurns: 1, settingSources: [],
-			extraArgs: { "strict-mcp-config": null },
+			extraArgs: { "strict-mcp-config": null, "await-initialize": null },
 		} });
 		for await (const message of q) {
 			if (message.type === "assistant") {
@@ -89,8 +91,7 @@ async function trial(arm) {
 			assert.equal(result.stop_reason, "end_turn");
 		}
 		const records = readFileSync(session.jsonlPath, "utf8").trim().split("\n").map((line) => JSON.parse(line));
-		assert.ok(records.some((r) => r.type === "user" && r.isMeta && r.message?.content?.some((block) => block.type === "text" && block.text === continuation.prompt)),
-			"CC did not inject the intended note as an interrupted-turn resume");
+		assert.ok(!JSON.stringify(records).includes("No response requested."), "CC answered the note with a synthetic reply instead of resuming it");
 		const stopped = reads === 0;
 		const spoke = text.trim().length > 0;
 		console.log(`${arm}: ${stopped ? "stopped" : "continued"} (${JSON.stringify(text).slice(0, 200)})`);

@@ -20,7 +20,8 @@ export function registerAccount(pi: ExtensionAPI, provider: Config["provider"] =
 	if (provider.account !== undefined && dir !== undefined && !existsSync(dir)) {
 		console.error(`claude-bridge: account "${provider.account}" is not signed in. Run /claude-account login`);
 	}
-	pi.registerCommand("claude-account", claudeAccountCommand);
+	// Upstream's tests activate the extension with a pi that has no commands.
+	pi.registerCommand?.("claude-account", claudeAccountCommand);
 }
 
 /** Point every Claude Code child at the account's login, or back at whatever

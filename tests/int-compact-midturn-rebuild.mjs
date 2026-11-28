@@ -226,9 +226,9 @@ try {
 		"a tool handler was left waiting — the discarded query stranded one",
 	);
 
-	// The turn goes on at its tool result. Opened with a prompt, CC finds two user
-	// records in a row and writes a <synthetic> "No response requested." between
-	// them, which the model reads as its own answer (#274).
+	// The turn goes on at its tool result. Opened with a stdin prompt, CC sees
+	// two user records in a row and inserts a <synthetic> "No response requested."
+	// between them, which the model reads as its own reply (#274).
 	const projects = join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"), "projects");
 	const ids = new Set([...debugLog.matchAll(/sessionId=([0-9a-f-]{36})/g)].map((m) => m[1]));
 	const files = readdirSync(projects).flatMap((dir) => [...ids].map((id) => join(projects, dir, `${id}.jsonl`))).filter(existsSync);

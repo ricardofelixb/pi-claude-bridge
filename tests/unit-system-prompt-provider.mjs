@@ -20,7 +20,7 @@ const handlers = {};
 let provider;
 function activate() {
 	for (const key of Object.keys(handlers)) delete handlers[key];
-	mod.default({ on: (name, fn) => { (handlers[name] ??= []).push(fn); }, registerProvider: (_id, value) => { provider = value; }, registerCommand: () => {} });
+	mod.default({ on: (name, fn) => { (handlers[name] ??= []).push(fn); }, registerProvider: (_id, value) => { provider = value; } });
 }
 const model = () => provider.models.find((m) => m.id.includes("haiku")) ?? provider.models[0];
 const head = (opts) => { const state = buildSystemPromptState(opts); return { role: "system", content: state.content, sections: state.sections, timestamp: 0 }; };

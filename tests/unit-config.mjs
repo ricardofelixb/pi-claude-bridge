@@ -116,7 +116,6 @@ describe("the old askClaude setting", () => {
 			activate({
 				on: (event, fn) => { if (event === "session_start") starts.push(fn); },
 				registerProvider: () => {},
-				registerCommand: () => {},
 				...(tools ? { getAllTools: () => tools.map((name) => ({ name })) } : {}),
 			});
 			for (const start of starts) start({ reason }, ctx);

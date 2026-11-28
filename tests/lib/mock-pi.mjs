@@ -8,7 +8,6 @@ export function activateWithMockPi(activateFn) {
 	(activateFn ?? activate)({
 		on: (event, handler) => handlers.set(event, handler),
 		registerProvider: () => {},
-		registerCommand: () => {},
 	});
 	return handlers;
 }
