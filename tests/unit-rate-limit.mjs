@@ -47,6 +47,40 @@ describe("rateLimitResponse", () => {
 		});
 	});
 
+	it("reports the event's own window when there are no unifiedWindows", () => {
+		const { headers } = rateLimitResponse({
+			status: "allowed_warning", resetsAt: 1789770600, rateLimitType: "five_hour", utilization: 0.92,
+		});
+
+		assert.equal(headers["anthropic-ratelimit-unified-5h-utilization"], "0.92");
+		assert.equal(headers["anthropic-ratelimit-unified-5h-reset"], "1789770600");
+	});
+
+	it("prefers unifiedWindows over the event's own window", () => {
+		const { headers } = rateLimitResponse({
+			status: "allowed", resetsAt: 1789000000, rateLimitType: "five_hour", utilization: 0.9,
+			unifiedWindows: { five_hour: { utilization: 0.14, resetsAt: 1789770600 } },
+		});
+
+		assert.equal(headers["anthropic-ratelimit-unified-5h-utilization"], "0.14");
+		assert.equal(headers["anthropic-ratelimit-unified-5h-reset"], "1789770600");
+	});
+
+	it("reports an overage window, keeping the explicit overage reset", () => {
+		const { headers } = rateLimitResponse({
+			status: "allowed_warning", resetsAt: 1789000000, rateLimitType: "overage", utilization: 0.8, overageResetsAt: 1790812800,
+		});
+
+		assert.equal(headers["anthropic-ratelimit-unified-overage-utilization"], "0.8");
+		assert.equal(headers["anthropic-ratelimit-unified-overage-reset"], "1790812800");
+	});
+
+	it("does not invent a window header for a claim the API has no window for", () => {
+		const { headers } = rateLimitResponse({ status: "allowed_warning", rateLimitType: "seven_day_opus", utilization: 0.5 });
+
+		assert.ok(!Object.keys(headers).some((h) => h.endsWith("-utilization")), JSON.stringify(headers));
+	});
+
 	it("keeps a window name Claude Code has no abbreviation for", () => {
 		const { headers } = rateLimitResponse({ status: "allowed", unifiedWindows: { seven_day_opus: { utilization: 0.3 } } });
 
@@ -107,6 +141,29 @@ describe("consumeQuery forwarding rate_limit_event", () => {
 		const warnings = notices.filter((n) => n.includes("third-party app"));
 		assert.equal(warnings.length, 1, notices.join("\n"));
 		assert.match(warnings[0], /billed to Extra Usage/);
+	});
+
+	it("keeps the parent session's UI across a headless subagent session_start", async () => {
+		const starts = [];
+		mod.default({
+			on: (event, fn) => { if (event === "session_start") starts.push(fn); },
+			registerProvider: () => {},
+		});
+		const notices = [];
+		const modelRegistry = { getProvider: () => ({}) };
+		const emitStart = (sid, hasUI, notify) => {
+			for (const fn of starts) fn({}, { cwd: "/tmp", hasUI, ui: { notify }, modelRegistry, sessionManager: { getSessionId: () => sid } });
+		};
+		try {
+			emitStart("parent", true, (message) => notices.push(message));
+			emitStart("subagent", false, () => { throw new Error("no-op UI should not be called"); });
+			await replay([{ type: "rate_limit_event", rate_limit_info: { status: "rejected", resetsAt: 1791580200, rateLimitType: "five_hour" } }], () => {});
+		} finally {
+			__test.setPiUI(null);
+		}
+
+		assert.equal(notices.length, 1);
+		assert.match(notices[0], /rate limit reached/);
 	});
 
 	it("finishes the turn when onResponse throws", async () => {

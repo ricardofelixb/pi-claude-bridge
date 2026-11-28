@@ -15,14 +15,14 @@ so upstream's `test:unit` glob runs them too. Do not install this worktree in pi
   - Continuation note wording (fork PR #9): `CONTINUE_AFTER_REWRITE_PROMPT` and
     `CONTINUE_AFTER_RESUME_PROMPT` tell Claude the turn goes on and to make its next
     tool call or give the final answer. Upstream's two constants are deleted from
-    `src/index.ts`; L23 imports the fork's, used unchanged at L1934.
+    `src/index.ts`; L23 imports the fork's, used unchanged at L1944.
   - `--await-initialize` before an automatic resume (fork PR #9): the SDK skips its
     initialize gate with a custom spawner, so the first resumed request could miss
-    pi's MCP tools. Hook: L2002 `configureResumeArgs(extraArgs, Boolean(inlinePromptUuid));`.
+    pi's MCP tools. Hook: L2012 `configureResumeArgs(extraArgs, Boolean(inlinePromptUuid));`.
 - Keep pi's tools when compaction drops the system message (fork PR #8):
   `src/fork/declarations.ts`. Hooks in `src/index.ts`: L23 import,
-  L1765 `withRememberedDeclarations`, L1898 `warnIfToolless`, L2266
-  `setActiveToolsProbe`, L2300/L2331 `setSnapshotSource`, L2327–L2329 the
+  L1775 `withRememberedDeclarations`, L1908 `warnIfToolless`, L2276
+  `setActiveToolsProbe`, L2310/L2341 `setSnapshotSource`, L2337–L2339 the
   `context_with_system` handler calling `observeDeclaration`.
 - Setting: none. Tests: `tests/unit-orphan-result-after-restart.mjs` (note wording
   after restart and after compaction), `tests/unit-fork-declarations.mjs`,
@@ -41,7 +41,7 @@ so upstream's `test:unit` glob runs them too. Do not install this worktree in pi
   `src/config.ts:67` returns
   `withProjectAccount({ askClaude: global.askClaude, provider }, cwd, tryParseJson)`
   after upstream's `systemPromptPreset` normalization.
-  `src/index.ts:23` imports the shared fork barrel and `src/index.ts:2265`
+  `src/index.ts:23` imports the shared fork barrel and `src/index.ts:2275`
   calls `registerAccount(pi, providerSettings)`.
 - Setting: `provider.account`, global or project `.pi/claude-bridge.json`;
   project account overrides global account, no other project provider settings
@@ -117,6 +117,11 @@ so upstream's `test:unit` glob runs them too. Do not install this worktree in pi
 - Commit extractions before `git merge --no-ff upstream/main`. Keep upstream
   code in conflicts and reattach these hooks; rerere is enabled. Walk every
   entry's hook, setting and regression test after merging.
+- Post-merge audit at upstream `28c4125` (0.13.1): entries 1–7 keep their hooks,
+  settings and tests. Upstream's #292 `session_start` change (`piUI` only from a
+  context with a UI) conflicted with the `setSnapshotSource` hook; both are kept.
+  Upstream's #275 rate-limit headers and #294 streamed tool arguments touch no fork
+  code; #272 is still unfixed upstream. Fork changelog entries stay under `UNRELEASED`.
 - Post-merge audit at upstream `ca1fbfc`: entry 1's #274 fix is now upstream's;
   entries 2–7 and the fork's continuation note, `--await-initialize` and
   declaration hooks are in place. Upstream's inline-prompt resume, alternate
