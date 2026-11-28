@@ -58,8 +58,9 @@ so upstream's `test:unit` glob runs them too. Do not install this worktree in pi
   registration as account activation; no inline account policy remains there.
 - Setting: writes only project `provider.account`; local git exclude protects
   the choice. Never changes executable or billing settings from project config.
-- Fork test: `tests/unit-fork-account.mjs`; existing command-registration stubs
-  in upstream test harnesses remain necessary.
+- Fork test: `tests/unit-fork-account.mjs`. `registerAccount` skips the command
+  when pi has no `registerCommand`, so upstream tests' minimal pi mocks need no
+  fork stub (upstream's #292 test in `tests/unit-rate-limit.mjs` has none).
 
 ## 4. Shortened history (#77): upstream-owned implementation
 
