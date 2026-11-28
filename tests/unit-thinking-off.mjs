@@ -11,7 +11,7 @@ let providerConfig;
 activate({
 	on: () => {},
 	registerProvider: (_name, config) => { providerConfig = config; },
-	registerCommand: () => {},
+	registerTool: () => {},
 });
 
 async function queryOptionsFor(model, streamOptions) {

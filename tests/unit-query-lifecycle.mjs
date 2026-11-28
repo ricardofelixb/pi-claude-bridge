@@ -16,7 +16,7 @@ const mod = await import("../src/index.js");
 const { __test } = mod;
 let provider;
 const handlers = {};
-mod.default({ on: (name, fn) => { (handlers[name] ??= []).push(fn); }, registerProvider: (_id, value) => { provider = value; }, registerCommand: () => {} });
+mod.default({ on: (name, fn) => { (handlers[name] ??= []).push(fn); }, registerProvider: (_id, value) => { provider = value; } });
 const model = provider.models[0];
 const tools = [{ name: "read", description: "read", parameters: { type: "object", properties: {} } }];
 const user = (content) => ({ role: "user", content, timestamp: 1 });
@@ -297,7 +297,7 @@ it("a reloaded module shares state and stopping writers, and the old finalizer n
 	for (const fn of handlers.session_shutdown) fn({}, { sessionManager: { getSessionId: () => "pi" } });
 	const fresh = await import(`../src/index.js?reload=${Date.now()}`);
 	let freshProvider;
-	fresh.default({ on() {}, registerProvider: (_id, value) => { freshProvider = value; }, registerCommand: () => {} });
+	fresh.default({ on() {}, registerProvider: (_id, value) => { freshProvider = value; } });
 	fresh.__test.setQuery(fakeQuery);
 	assert.strictEqual(fresh.__test.getSharedSession("pi"), committed, "the newer memory state, not the empty disk");
 	const waiting = new AbortController();
@@ -548,7 +548,7 @@ async function runFatalTurn({ before = "", sessionId }) {
 		import { join } from "node:path";
 		const mod = await import(${JSON.stringify(new URL("../src/index.ts", import.meta.url).href)});
 		let provider;
-		mod.default({ on() {}, registerProvider: (_id, value) => { provider = value; }, registerCommand: () => {} });
+		mod.default({ on() {}, registerProvider: (_id, value) => { provider = value; } });
 		const model = provider.models[0];
 		const file = join(process.env.PI_CODING_AGENT_DIR, "claude-bridge", "sessions", "s-" + createHash("sha256").update("pi", "utf16le").digest("hex") + ".json");
 		${before}

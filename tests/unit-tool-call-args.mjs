@@ -11,7 +11,7 @@ process.env.CLAUDE_BRIDGE_DEBUG = "1";
 const mod = await import("../src/index.js");
 const handlers = {};
 let provider;
-mod.default({ on: (name, fn) => { (handlers[name] ??= []).push(fn); }, registerProvider: (_id, value) => { provider = value; }, registerCommand: () => {} });
+mod.default({ on: (name, fn) => { (handlers[name] ??= []).push(fn); }, registerProvider: (_id, value) => { provider = value; } });
 const model = provider.models[0];
 const tools = [
 	{ name: "probe", description: "probe", parameters: { type: "object", properties: {

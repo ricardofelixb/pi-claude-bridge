@@ -20,7 +20,7 @@ import { globalConfigPath } from "../src/config.js";
 const mod = await import("../src/index.js");
 const { setQuery, resetSharedSession, activeQueryContexts, markRebuildForSession } = mod.__test;
 let providerConfig;
-const pi = { on: () => {}, registerProvider: (_name, config) => { providerConfig = config; }, registerCommand: () => {} };
+const pi = { on: () => {}, registerProvider: (_name, config) => { providerConfig = config; } };
 mod.default(pi);
 const streamSimple = providerConfig.streamSimple;
 const model = providerConfig.models[0];
